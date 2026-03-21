@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ctx-hive dashboard</title>
+<style>
+  /* ── Reset & Base ───────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --bg-hover: #30363d;
+    --border: #30363d; --text: #e6edf3; --text2: #8b949e; --text3: #6e7681;
+    --accent: #58a6ff; --green: #3fb950; --yellow: #d29922; --red: #f85149;
+    --orange: #d18616; --purple: #bc8cff;
+    --radius: 8px; --font: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+  }
+  html { font-size: 14px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── Layout ─────────────────────────────────────────────────── */
+  .shell { display: flex; height: 100vh; }
+  .sidebar { width: 220px; background: var(--bg2); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-logo { padding: 20px 16px 12px; font-family: var(--font); font-size: 15px;
+    font-weight: 700; color: var(--accent); letter-spacing: -0.5px;
+    display: flex; align-items: center; gap: 8px; }
+  .sidebar-logo svg { width: 20px; height: 20px; }
+  .sidebar-nav { flex: 1; padding: 8px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    border-radius: 6px; color: var(--text2); font-size: 13px; cursor: pointer;
+    transition: all 0.15s; user-select: none; }
+  .nav-item:hover { background: var(--bg3); color: var(--text); }
+  .nav-item.active { background: var(--bg3); color: var(--text); font-weight: 600; }
+  .nav-item svg { width: 16px; height: 16px; opacity: 0.7; }
+  .nav-item.active svg { opacity: 1; }
+  .sidebar-footer { padding: 12px 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text3); font-family: var(--font); }
+  .ws-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    margin-right: 6px; background: var(--text3); }
+  .ws-dot.connected { background: var(--green); }
+
+  .main { flex: 1; overflow-y: auto; padding: 24px 32px; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* ── Page header ────────────────────────────────────────────── */
+  .page-header { margin-bottom: 24px; }
+  .page-header h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .page-header p { color: var(--text2); font-size: 13px; }
+
+  /* ── Stat cards ─────────────────────────────────────────────── */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin-bottom: 24px; }
+  .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; }
+  .stat-label { font-size: 11px; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 6px; }
+  .stat-value { font-size: 28px; font-weight: 700; font-family: var(--font); }
+  .stat-value.green { color: var(--green); }
+  .stat-value.yellow { color: var(--yellow); }
+  .stat-value.red { color: var(--red); }
+  .stat-value.accent { color: var(--accent); }
+  .stat-sub { font-size: 11px; color: var(--text3); margin-top: 4px; font-family: var(--font); }
+
+  /* ── Charts ─────────────────────────────────────────────────── */
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+  .chart-card { background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; }
+  .chart-title { font-size: 12px; color: var(--text2); margin-bottom: 12px;
+    text-transform: uppercase; letter-spacing: 0.5px; }
+  .chart-canvas { width: 100%; height: 180px; }
+  .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 160px; padding-top: 8px; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .bar { width: 100%; border-radius: 4px 4px 0 0; min-height: 2px;
+    transition: height 0.4s ease; }
+  .bar-label { font-size: 10px; color: var(--text3); font-family: var(--font);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60px; }
+  .bar-value { font-size: 10px; color: var(--text2); font-family: var(--font); }
+
+  /* ── Donut chart ────────────────────────────────────────────── */
+  .donut-wrap { display: flex; align-items: center; gap: 24px; }
+  .donut-legend { display: flex; flex-direction: column; gap: 6px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .legend-count { font-family: var(--font); color: var(--text); margin-left: auto; min-width: 24px; text-align: right; }
+
+  /* ── Tables ─────────────────────────────────────────────────── */
+  .table-wrap { background: var(--bg2); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; }
+  .table-header { display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .table-header h2 { font-size: 14px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text3); text-align: left; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); font-weight: 500; }
+  td { padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(88,166,255,0.04); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600; font-family: var(--font); }
+  .badge-pending { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .badge-processing { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .badge-done { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-failed { background: rgba(248,81,73,0.15); color: var(--red); }
+
+  .scope-badge { display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-family: var(--font); }
+  .scope-project { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .scope-org { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .scope-personal { background: rgba(63,185,80,0.15); color: var(--green); }
+
+  .tag { display: inline-block; padding: 1px 6px; border-radius: 4px;
+    font-size: 10px; font-family: var(--font); background: var(--bg3);
+    color: var(--text2); margin-right: 4px; margin-bottom: 2px; }
+
+  .mono { font-family: var(--font); font-size: 12px; color: var(--text2); }
+  .truncate { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .text-dim { color: var(--text3); }
+
+  /* ── Filter bar ─────────────────────────────────────────────── */
+  .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .filter-select { background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); padding: 6px 10px; font-size: 12px;
+    cursor: pointer; outline: none; }
+  .filter-select:focus { border-color: var(--accent); }
+  .filter-select option { background: var(--bg2); }
+
+  /* ── Delete button ──────────────────────────────────────────── */
+  .btn-delete { background: none; border: 1px solid transparent; border-radius: 4px;
+    color: var(--text3); cursor: pointer; padding: 4px 8px; font-size: 11px;
+    transition: all 0.15s; }
+  .btn-delete:hover { color: var(--red); border-color: var(--red); background: rgba(248,81,73,0.1); }
+
+  /* ── Context detail modal ───────────────────────────────────── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: none; align-items: center; justify-content: center; z-index: 100; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+    width: 640px; max-width: 90vw; max-height: 80vh; overflow-y: auto; padding: 24px; }
+  .modal h2 { font-size: 18px; margin-bottom: 8px; }
+  .modal-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .modal-body { font-size: 13px; line-height: 1.7; color: var(--text2);
+    white-space: pre-wrap; word-break: break-word; background: var(--bg);
+    border-radius: 6px; padding: 16px; border: 1px solid var(--border); }
+  .modal-close { position: absolute; top: 12px; right: 12px; background: none;
+    border: none; color: var(--text2); cursor: pointer; font-size: 18px; }
+  .modal-actions { margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end; }
+  .btn { padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg3); color: var(--text);
+    transition: all 0.15s; }
+  .btn:hover { background: var(--bg-hover); }
+  .btn-danger { border-color: var(--red); color: var(--red); }
+  .btn-danger:hover { background: rgba(248,81,73,0.15); }
+
+  /* ── Empty state ────────────────────────────────────────────── */
+  .empty { text-align: center; padding: 48px; color: var(--text3); }
+  .empty-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.4; }
+  .empty p { font-size: 13px; }
+
+  /* ── Pulse animation for processing ─────────────────────────── */
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .pulse { animation: pulse 2s infinite; }
+
+  /* ── Timeline sparkline ─────────────────────────────────────── */
+  .sparkline { display: flex; align-items: flex-end; gap: 1px; height: 32px; }
+  .spark-bar { flex: 1; background: var(--accent); border-radius: 1px; min-height: 1px;
+    opacity: 0.7; transition: height 0.3s; }
+
+  /* ── Repo page ────────────────────────────────────────────────── */
+  .badge-tracked { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-untracked { background: rgba(110,118,129,0.15); color: var(--text3); }
+  .badge-missing { background: rgba(248,81,73,0.15); color: var(--red); }
+  .branch-badge { display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-family: var(--font); background: rgba(88,166,255,0.12); color: var(--accent); }
+  .behind-zero { color: var(--green); }
+  .behind-nonzero { color: var(--red); font-weight: 600; }
+
+  .btn-sm { background: none; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text2); cursor: pointer; padding: 4px 8px; font-size: 11px;
+    transition: all 0.15s; }
+  .btn-sm:hover { background: var(--bg3); color: var(--text); border-color: var(--text3); }
+  .btn-sm.btn-track { border-color: var(--green); color: var(--green); }
+  .btn-sm.btn-track:hover { background: rgba(63,185,80,0.1); }
+  .btn-sm.btn-sync { border-color: var(--accent); color: var(--accent); }
+  .btn-sm.btn-sync:hover { background: rgba(88,166,255,0.1); }
+  .btn-sm.btn-sync.syncing { opacity: 0.5; pointer-events: none; }
+  .btn-sm.btn-untrack { border-color: transparent; color: var(--text3); }
+  .btn-sm.btn-untrack:hover { color: var(--red); border-color: var(--red); background: rgba(248,81,73,0.08); }
+
+  .repo-path { font-family: var(--font); font-size: 11px; color: var(--text3);
+    max-width: 350px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .repo-actions { display: flex; gap: 4px; align-items: center; }
+
+  /* ── Styled tooltips ──────────────────────────────────────────── */
+  .has-tooltip { position: relative; }
+  .has-tooltip::after { content: attr(data-tooltip); position: absolute; bottom: calc(100% + 6px);
+    left: 50%; transform: translateX(-50%); padding: 4px 8px; border-radius: 4px;
+    background: var(--bg-hover); color: var(--text); font-size: 11px; white-space: nowrap;
+    pointer-events: none; opacity: 0; transition: opacity 0.15s; z-index: 10;
+    border: 1px solid var(--border); }
+  .has-tooltip:hover::after { opacity: 1; }
+
+  /* ── Responsive table ─────────────────────────────────────────── */
+  .table-scroll { overflow-x: auto; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
+        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+        <line x1="12" y1="22.08" x2="12" y2="12"/>
+      </svg>
+      ctx-hive
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-page="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        Overview
+      </div>
+      <div class="nav-item" data-page="jobs">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Jobs
+      </div>
+      <div class="nav-item" data-page="contexts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        Contexts
+      </div>
+      <div class="nav-item" data-page="repos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
+        Repos
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <span class="ws-dot" id="ws-status"></span>
+      <span id="ws-label">connecting...</span>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+    <!-- ════════ OVERVIEW ════════ -->
+    <div class="page active" id="page-overview">
+      <div class="page-header">
+        <h1>Dashboard</h1>
+        <p>Live overview of your context hive</p>
+      </div>
+
+      <div class="stats" id="overview-stats"></div>
+
+      <div class="charts">
+        <div class="chart-card">
+          <div class="chart-title">Jobs by Status</div>
+          <div id="chart-job-status" class="bar-chart"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Contexts by Scope</div>
+          <div id="chart-scope" class="donut-wrap"></div>
+        </div>
+      </div>
+
+      <div class="charts">
+        <div class="chart-card">
+          <div class="chart-title">Top Projects by Context Count</div>
+          <div id="chart-projects" class="bar-chart"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Job Activity (last 30 jobs)</div>
+          <div id="chart-activity"></div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-header"><h2>Recent Jobs</h2></div>
+        <table>
+          <thead><tr><th>Status</th><th>Type</th><th>Project</th><th>Created</th></tr></thead>
+          <tbody id="overview-recent-jobs"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ════════ JOBS ════════ -->
+    <div class="page" id="page-jobs">
+      <div class="page-header">
+        <h1>Jobs</h1>
+        <p>Track all job executions across projects</p>
+      </div>
+
+      <div class="filters" style="margin-bottom: 16px;">
+        <select class="filter-select" id="job-status-filter">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="processing">Processing</option>
+          <option value="done">Done</option>
+          <option value="failed">Failed</option>
+        </select>
+        <select class="filter-select" id="job-project-filter">
+          <option value="">All projects</option>
+        </select>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Status</th><th>Project</th><th>Transcript</th><th>Duration</th><th>Stats</th><th>Created</th></tr></thead>
+          <tbody id="jobs-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ════════ CONTEXTS ════════ -->
+    <div class="page" id="page-contexts">
+      <div class="page-header">
+        <h1>Contexts</h1>
+        <p>Browse and manage your stored context entries</p>
+      </div>
+
+      <div class="filters" style="margin-bottom: 16px;">
+        <select class="filter-select" id="ctx-scope-filter">
+          <option value="">All scopes</option>
+          <option value="project">Project</option>
+          <option value="org">Org</option>
+          <option value="personal">Personal</option>
+        </select>
+        <select class="filter-select" id="ctx-project-filter">
+          <option value="">All projects</option>
+        </select>
+        <select class="filter-select" id="ctx-sort">
+          <option value="time">Sort by time</option>
+          <option value="project">Sort by project</option>
+        </select>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Tags</th><th>Updated</th><th></th></tr></thead>
+          <tbody id="ctx-tbody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="ctx-empty" style="display:none;">
+        <div class="empty-icon">&#x1F4ED;</div>
+        <p>No contexts yet. Run <code style="color:var(--accent);">ctx-hive init</code> to auto-generate entries.</p>
+      </div>
+    </div>
+
+    <!-- ════════ REPOS ════════ -->
+    <div class="page" id="page-repos">
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <h1>Repos</h1>
+          <p>Manage tracked repositories</p>
+        </div>
+        <button class="btn" id="refresh-repos-btn" style="display:flex;align-items:center;gap:6px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+          Refresh
+        </button>
+      </div>
+
+      <div class="stats" id="repos-stats"></div>
+
+      <div class="table-wrap" id="repos-table-wrap">
+        <div class="table-header">
+          <h2>Repositories</h2>
+          <div class="filters">
+            <select class="filter-select" id="repo-filter">
+              <option value="">All repos</option>
+              <option value="tracked">Tracked only</option>
+              <option value="untracked">Untracked only</option>
+            </select>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr>
+              <th>Name</th>
+              <th>Branch</th>
+              <th>Behind</th>
+              <th>Status</th>
+              <th>Contexts</th>
+              <th>Last Scanned</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="repos-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="empty" id="repos-empty" style="display:none;">
+        <div class="empty-icon">&#x1F4C2;</div>
+        <p>No repositories found.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ── Context detail modal ──────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal">
+    <h2 id="modal-title"></h2>
+    <div class="modal-meta" id="modal-meta"></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="modal-delete">Delete</button>
+      <button class="btn" id="modal-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────
+let ws = null;
+let metrics = null;
+let allJobs = [];
+let allContexts = [];
+let allRepos = [];
+let scanLoading = false;
+let syncingRepos = new Set();
+let currentPage = 'overview';
+let selectedContext = null;
+
+// ── Navigation ────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    currentPage = item.dataset.page;
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    item.classList.add('active');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + currentPage).classList.add('active');
+    if (currentPage === 'jobs') fetchJobs();
+    if (currentPage === 'contexts') fetchContexts();
+    if (currentPage === 'repos') fetchTrackedRepos();
+  });
+});
+
+// ── WebSocket ─────────────────────────────────────────────────────────
+function connectWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  ws.onopen = () => {
+    document.getElementById('ws-status').classList.add('connected');
+    document.getElementById('ws-label').textContent = 'live';
+  };
+  ws.onclose = () => {
+    document.getElementById('ws-status').classList.remove('connected');
+    document.getElementById('ws-label').textContent = 'reconnecting...';
+    setTimeout(connectWs, 3000);
+  };
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.event === 'metrics') {
+        metrics = msg.data;
+        if (currentPage === 'overview') renderOverview();
+      }
+      if (msg.event && msg.event.startsWith('job:')) {
+        if (currentPage === 'jobs') fetchJobs();
+      }
+      if (msg.event && msg.event.startsWith('context:')) {
+        if (currentPage === 'contexts') fetchContexts();
+      }
+      if (msg.event && msg.event.startsWith('repo:')) {
+        if (currentPage === 'repos') fetchTrackedRepos();
+      }
+    } catch {}
+  };
+}
+connectWs();
+
+// ── API Fetchers ──────────────────────────────────────────────────────
+async function fetchMetrics() {
+  try {
+    const r = await fetch('/api/metrics');
+    metrics = await r.json();
+    renderOverview();
+  } catch {}
+}
+
+async function fetchJobs() {
+  try {
+    const r = await fetch('/api/jobs');
+    allJobs = await r.json();
+    renderJobs();
+  } catch {}
+}
+
+async function fetchContexts() {
+  const scope = document.getElementById('ctx-scope-filter').value;
+  const project = document.getElementById('ctx-project-filter').value;
+  const sortBy = document.getElementById('ctx-sort').value;
+  const params = new URLSearchParams();
+  if (scope) params.set('scope', scope);
+  if (project) params.set('project', project);
+  if (sortBy) params.set('sortBy', sortBy);
+  try {
+    const r = await fetch('/api/contexts?' + params);
+    allContexts = await r.json();
+    renderContexts();
+  } catch {}
+}
+
+async function fetchProjects() {
+  try {
+    const r = await fetch('/api/projects');
+    const projects = await r.json();
+    ['job-project-filter', 'ctx-project-filter'].forEach(id => {
+      const sel = document.getElementById(id);
+      const current = sel.value;
+      sel.innerHTML = '<option value="">All projects</option>';
+      projects.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p; opt.textContent = p;
+        sel.appendChild(opt);
+      });
+      sel.value = current;
+    });
+  } catch {}
+}
+
+async function deleteContext(id) {
+  if (!confirm('Delete this context entry? This cannot be undone.')) return;
+  try {
+    await fetch('/api/contexts/' + encodeURIComponent(id), { method: 'DELETE' });
+    closeModal();
+    fetchContexts();
+    fetchMetrics();
+  } catch {}
+}
+
+// ── Render: Overview ──────────────────────────────────────────────────
+function renderOverview() {
+  if (!metrics) return;
+  const j = metrics.jobs;
+  const c = metrics.contexts;
+
+  // Stats
+  document.getElementById('overview-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total Jobs</div>
+      <div class="stat-value accent">${j.total}</div></div>
+    <div class="stat-card"><div class="stat-label">Processing</div>
+      <div class="stat-value ${j.processing > 0 ? 'yellow pulse' : ''}">${j.processing}</div></div>
+    <div class="stat-card"><div class="stat-label">Completed</div>
+      <div class="stat-value green">${j.done}</div>
+      <div class="stat-sub">${j.total > 0 ? Math.round(j.done / j.total * 100) : 0}% success rate</div></div>
+    <div class="stat-card"><div class="stat-label">Failed</div>
+      <div class="stat-value ${j.failed > 0 ? 'red' : ''}">${j.failed}</div></div>
+    <div class="stat-card"><div class="stat-label">Total Contexts</div>
+      <div class="stat-value accent">${c.total}</div></div>
+    <div class="stat-card"><div class="stat-label">Projects</div>
+      <div class="stat-value">${Object.keys(c.byProject).length}</div></div>
+  `;
+
+  // Job status bar chart
+  renderBarChart('chart-job-status', [
+    { label: 'Pending', value: j.pending, color: 'var(--yellow)' },
+    { label: 'Processing', value: j.processing, color: 'var(--accent)' },
+    { label: 'Done', value: j.done, color: 'var(--green)' },
+    { label: 'Failed', value: j.failed, color: 'var(--red)' },
+  ]);
+
+  // Scope donut
+  renderDonut('chart-scope', c.byScope);
+
+  // Project bar chart
+  const projEntries = Object.entries(c.byProject).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const colors = ['var(--accent)', 'var(--purple)', 'var(--green)', 'var(--yellow)',
+    'var(--orange)', 'var(--red)', '#58a6ff', '#bc8cff'];
+  renderBarChart('chart-projects',
+    projEntries.map(([name, count], i) => ({ label: name, value: count, color: colors[i % colors.length] }))
+  );
+
+  // Activity sparkline
+  renderActivity('chart-activity', metrics.recentJobs);
+
+  // Recent jobs table
+  const tbody = document.getElementById('overview-recent-jobs');
+  tbody.innerHTML = (metrics.recentJobs || []).slice(0, 8).map(j => `
+    <tr>
+      <td><span class="badge badge-${j.status}">${j.status}</span></td>
+      <td class="mono">${esc(j.type)}</td>
+      <td>${esc(j.project || '—')}</td>
+      <td class="mono text-dim">${timeAgo(j.createdAt)}</td>
+    </tr>
+  `).join('');
+}
+
+// ── Render: Jobs ──────────────────────────────────────────────────────
+function renderJobs() {
+  const statusF = document.getElementById('job-status-filter').value;
+  const projectF = document.getElementById('job-project-filter').value;
+  let filtered = allJobs;
+  if (statusF) filtered = filtered.filter(j => j.status === statusF);
+  if (projectF) filtered = filtered.filter(j => j.project === projectF);
+
+  const tbody = document.getElementById('jobs-tbody');
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map(j => `
+    <tr>
+      <td><span class="badge badge-${j.status}">${j.status}</span></td>
+      <td>${esc(j.project || '—')}</td>
+      <td class="mono text-dim">${j.transcriptTokens != null ? '~' + formatCompact(j.transcriptTokens) + ' tokens' : '—'}</td>
+      <td class="mono">${renderDuration(j)}</td>
+      <td>${renderStats(j)}</td>
+      <td class="mono text-dim">${timeAgo(j.createdAt)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderDuration(j) {
+  if (j.status === 'processing' && j.startedAt) {
+    return '<span class="pulse" data-started="' + esc(j.startedAt) + '">' + formatDuration(Date.now() - new Date(j.startedAt).getTime()) + '</span>';
+  }
+  if ((j.status === 'done' || j.status === 'failed') && j.duration_ms) {
+    return formatDuration(j.duration_ms);
+  }
+  return '<span class="text-dim">—</span>';
+}
+
+function renderStats(j) {
+  if (j.status === 'failed' && j.error) {
+    return '<span class="mono" style="color:var(--red);max-width:280px;display:inline-block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(j.error) + '">' + esc(j.error) + '</span>';
+  }
+  const parts = [];
+  if (j.entriesCreated != null) parts.push('<span class="mono" style="color:var(--green)">+' + j.entriesCreated + ' entries</span>');
+  if (j.inputTokens != null || j.outputTokens != null) {
+    const tok = [];
+    if (j.inputTokens != null) tok.push(formatCompact(j.inputTokens) + ' input');
+    if (j.outputTokens != null) tok.push(formatCompact(j.outputTokens) + ' output');
+    parts.push('<span class="mono text-dim">' + tok.join(', ') + ' tokens</span>');
+  }
+  return parts.length > 0 ? parts.join(' <span class="text-dim" style="opacity:0.4">·</span> ') : '<span class="text-dim">—</span>';
+}
+
+function formatDuration(ms) {
+  if (ms < 60000) return Math.floor(ms / 1000) + 's';
+  if (ms < 3600000) return Math.floor(ms / 60000) + 'm ' + Math.floor((ms % 60000) / 1000) + 's';
+  return Math.floor(ms / 3600000) + 'h ' + Math.floor((ms % 3600000) / 60000) + 'm';
+}
+
+function formatCompact(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k';
+  return String(n);
+}
+
+// ── Render: Contexts ──────────────────────────────────────────────────
+function renderContexts() {
+  const tbody = document.getElementById('ctx-tbody');
+  const empty = document.getElementById('ctx-empty');
+
+  if (allContexts.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = allContexts.map(c => `
+    <tr style="cursor:pointer;" onclick="openContext('${esc(c.id)}')">
+      <td style="font-weight:500;">${esc(c.title)}</td>
+      <td><span class="scope-badge scope-${c.scope}">${c.scope}</span></td>
+      <td class="mono">${esc(c.project || '—')}</td>
+      <td>${(c.tags || []).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}</td>
+      <td class="mono text-dim">${timeAgo(c.updated)}</td>
+      <td><button class="btn-delete" onclick="event.stopPropagation();deleteContext('${esc(c.id)}')">delete</button></td>
+    </tr>
+  `).join('');
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────
+function openContext(id) {
+  selectedContext = allContexts.find(c => c.id === id);
+  if (!selectedContext) return;
+  document.getElementById('modal-title').textContent = selectedContext.title;
+  document.getElementById('modal-meta').innerHTML = `
+    <span class="scope-badge scope-${selectedContext.scope}">${selectedContext.scope}</span>
+    ${selectedContext.project ? '<span class="mono" style="color:var(--text2)">' + esc(selectedContext.project) + '</span>' : ''}
+    <span class="mono text-dim">${selectedContext.id}</span>
+    <span class="mono text-dim">${new Date(selectedContext.updated).toLocaleString()}</span>
+    ${(selectedContext.tags||[]).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}
+  `;
+  document.getElementById('modal-body').textContent = selectedContext.body || '(empty)';
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('open');
+  selectedContext = null;
+}
+
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.getElementById('modal-delete').addEventListener('click', () => {
+  if (selectedContext) deleteContext(selectedContext.id);
+});
+
+// ── Repos ─────────────────────────────────────────────────────────────
+
+async function fetchRepos() {
+  const btn = document.getElementById('refresh-repos-btn');
+  scanLoading = true;
+  btn.disabled = true;
+  renderRepos();
+  try {
+    const r = await fetch('/api/repos/scan?root=' + encodeURIComponent('~/') + '&depth=4');
+    allRepos = await r.json();
+  } catch {}
+  scanLoading = false;
+  btn.disabled = false;
+  renderRepos();
+}
+
+// Keep old name for navigation handler
+const fetchTrackedRepos = fetchRepos;
+
+async function doTrackRepo(absPath) {
+  try {
+    await fetch('/api/repos/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ absPath })
+    });
+    await fetchRepos();
+  } catch {}
+}
+
+async function doUntrackRepo(absPath) {
+  try {
+    await fetch('/api/repos/untrack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ absPath })
+    });
+    await fetchRepos();
+  } catch {}
+}
+
+async function syncRepo(absPath) {
+  syncingRepos.add(absPath);
+  renderRepos();
+  try {
+    await fetch('/api/repos/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ absPath })
+    });
+  } catch {}
+  syncingRepos.delete(absPath);
+  renderRepos();
+}
+
+async function openRepo(absPath, target) {
+  try {
+    await fetch('/api/repos/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ absPath, target })
+    });
+  } catch {}
+}
+
+function renderRepos() {
+  const tbody = document.getElementById('repos-tbody');
+  const empty = document.getElementById('repos-empty');
+  const statsEl = document.getElementById('repos-stats');
+  const filterVal = document.getElementById('repo-filter').value;
+
+  if (scanLoading) {
+    empty.style.display = 'none';
+    document.getElementById('repos-table-wrap').style.display = 'block';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:32px;"><span class="spinner"></span><span style="margin-left:8px;color:var(--text2);">Scanning for repositories...</span></td></tr>';
+    statsEl.innerHTML = '';
+    return;
+  }
+
+  let repos = [...allRepos];
+
+  // Apply filter
+  if (filterVal === 'tracked') repos = repos.filter(r => r.tracked);
+  if (filterVal === 'untracked') repos = repos.filter(r => !r.tracked);
+
+  // Sort: tracked first, then by name
+  repos.sort((a, b) => {
+    if (a.tracked && !b.tracked) return -1;
+    if (!a.tracked && b.tracked) return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  const trackedCount = allRepos.filter(r => r.tracked).length;
+  const totalCount = allRepos.length;
+
+  // Stats
+  if (totalCount > 0) {
+    statsEl.innerHTML = `
+      <div class="stat-card"><div class="stat-label">Tracked</div>
+        <div class="stat-value green">${trackedCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Discovered</div>
+        <div class="stat-value accent">${totalCount}</div></div>
+    `;
+  } else {
+    statsEl.innerHTML = '';
+  }
+
+  if (repos.length === 0 && totalCount === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    document.getElementById('repos-table-wrap').style.display = 'none';
+    return;
+  }
+
+  empty.style.display = 'none';
+  document.getElementById('repos-table-wrap').style.display = 'block';
+
+  if (repos.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:32px;">No repos match the filter</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = repos.map(r => {
+    const isSyncing = syncingRepos.has(r.absPath);
+    const statusBadge = !r.exists
+      ? '<span class="badge badge-missing">missing</span>'
+      : r.tracked
+        ? '<span class="badge badge-tracked">tracked</span>'
+        : '<span class="badge badge-untracked">untracked</span>';
+
+    const branchHtml = r.currentBranch
+      ? '<span class="branch-badge">' + esc(r.currentBranch) + '</span>'
+      : '<span class="text-dim">—</span>';
+
+    const behindHtml = r.tracked && r.exists
+      ? (r.behindCount > 0
+        ? '<span class="behind-nonzero">' + r.behindCount + ' behind</span>'
+        : '<span class="behind-zero">up to date</span>')
+      : '<span class="text-dim">—</span>';
+
+    const ctxHtml = r.tracked
+      ? '<span class="mono">' + (r.contextCount || 0) + '</span>'
+      : '<span class="text-dim">—</span>';
+
+    const scannedHtml = r.lastScannedAt
+      ? '<span class="mono text-dim">' + timeAgo(r.lastScannedAt) + '</span>'
+      : '<span class="text-dim">never</span>';
+
+    const actionsHtml = `<div class="repo-actions">
+      ${r.tracked
+        ? `<button class="btn-sm btn-sync has-tooltip ${isSyncing ? 'syncing' : ''}" data-tooltip="Full context sync" onclick="event.stopPropagation();syncRepo('${esc(r.absPath)}')">${isSyncing ? '<span class="spinner"></span>' : '&#x21BB;'}</button>`
+        : `<button class="btn-sm btn-track" onclick="event.stopPropagation();doTrackRepo('${esc(r.absPath)}')">Track</button>`}
+      <button class="btn-sm has-tooltip" data-tooltip="Open in VS Code" onclick="event.stopPropagation();openRepo('${esc(r.absPath)}','vscode')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg>
+      </button>
+      <button class="btn-sm has-tooltip" data-tooltip="Open in Terminal" onclick="event.stopPropagation();openRepo('${esc(r.absPath)}','terminal')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      </button>
+      ${r.tracked
+        ? `<button class="btn-sm btn-untrack has-tooltip" data-tooltip="Stop tracking" onclick="event.stopPropagation();doUntrackRepo('${esc(r.absPath)}')">&#x2715;</button>`
+        : ''}
+    </div>`;
+
+    const pathDisplay = r.relPath || r.absPath.replace(/^\/Users\/[^/]+/, '~');
+
+    return `<tr>
+      <td><div style="font-weight:500;">${esc(r.name)}</div><div class="repo-path" title="${esc(r.absPath)}">${esc(pathDisplay)}</div></td>
+      <td>${branchHtml}</td>
+      <td>${behindHtml}</td>
+      <td>${statusBadge}</td>
+      <td>${ctxHtml}</td>
+      <td>${scannedHtml}</td>
+      <td>${actionsHtml}</td>
+    </tr>`;
+  }).join('');
+}
+
+document.getElementById('refresh-repos-btn').addEventListener('click', fetchRepos);
+
+// ── Chart renderers ───────────────────────────────────────────────────
+function renderBarChart(elId, items) {
+  const el = document.getElementById(elId);
+  if (!items || items.length === 0) { el.innerHTML = '<div class="empty"><p>No data</p></div>'; return; }
+  const max = Math.max(...items.map(i => i.value), 1);
+  el.innerHTML = items.map(i => {
+    const h = Math.max(2, (i.value / max) * 140);
+    return `<div class="bar-col">
+      <div class="bar-value">${i.value}</div>
+      <div class="bar" style="height:${h}px;background:${i.color}"></div>
+      <div class="bar-label" title="${esc(i.label)}">${esc(i.label)}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderDonut(elId, byScope) {
+  const el = document.getElementById(elId);
+  const entries = Object.entries(byScope || {});
+  const total = entries.reduce((s, [,v]) => s + v, 0) || 1;
+  const colors = { project: 'var(--accent)', org: 'var(--purple)', personal: 'var(--green)' };
+
+  // SVG donut
+  let offset = 0;
+  const segments = entries.map(([scope, count]) => {
+    const pct = (count / total) * 100;
+    const seg = `<circle cx="60" cy="60" r="45" fill="none" stroke="${colors[scope]||'var(--text3)'}"
+      stroke-width="18" stroke-dasharray="${pct * 2.827} ${282.7 - pct * 2.827}"
+      stroke-dashoffset="${-offset * 2.827}" />`;
+    offset += pct;
+    return seg;
+  });
+
+  const legend = entries.map(([scope, count]) =>
+    `<div class="legend-item"><span class="legend-dot" style="background:${colors[scope]||'var(--text3)'}"></span>
+      ${scope}<span class="legend-count">${count}</span></div>`
+  ).join('');
+
+  el.innerHTML = `
+    <svg viewBox="0 0 120 120" width="120" height="120">${segments.join('')}
+      <text x="60" y="64" text-anchor="middle" fill="var(--text)" font-size="18" font-weight="700" font-family="var(--font)">${total}</text>
+    </svg>
+    <div class="donut-legend">${legend}</div>
+  `;
+}
+
+function renderActivity(elId, recentJobs) {
+  const el = document.getElementById(elId);
+  if (!recentJobs || recentJobs.length === 0) {
+    el.innerHTML = '<div class="sparkline" style="align-items:center;justify-content:center;color:var(--text3);font-size:12px;">No activity yet</div>';
+    return;
+  }
+  // Group by hour
+  const buckets = {};
+  recentJobs.forEach(j => {
+    const d = new Date(j.createdAt);
+    const key = d.toISOString().slice(0, 13);
+    buckets[key] = (buckets[key] || 0) + 1;
+  });
+  const vals = Object.values(buckets);
+  const max = Math.max(...vals, 1);
+  el.innerHTML = `<div class="sparkline">${vals.map(v =>
+    `<div class="spark-bar" style="height:${Math.max(2, (v / max) * 30)}px"></div>`
+  ).join('')}</div>
+  <div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:var(--font);">${vals.length} active hours</div>`;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function esc(str) {
+  if (!str) return '';
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  return Math.floor(diff / 86400000) + 'd ago';
+}
+
+// ── Filter listeners ──────────────────────────────────────────────────
+['job-status-filter', 'job-project-filter'].forEach(id =>
+  document.getElementById(id).addEventListener('change', renderJobs)
+);
+['ctx-scope-filter', 'ctx-project-filter', 'ctx-sort'].forEach(id =>
+  document.getElementById(id).addEventListener('change', fetchContexts)
+);
+document.getElementById('repo-filter').addEventListener('change', renderRepos);
+
+// ── Live elapsed timer for processing jobs ───────────────────────────
+setInterval(() => {
+  document.querySelectorAll('[data-started]').forEach(el => {
+    const elapsed = Date.now() - new Date(el.dataset.started).getTime();
+    el.textContent = formatDuration(elapsed);
+  });
+}, 1000);
+
+// ── Init ──────────────────────────────────────────────────────────────
+fetchMetrics();
+fetchProjects();
+</script>
+</body>
+</html>

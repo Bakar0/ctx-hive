@@ -86,7 +86,7 @@ Results are saved as searchable context entries.
 
 ## Storage
 
-Entries are stored as Markdown files with YAML frontmatter under `~/.omni/context-hive/`, organized by scope. A JSON index enables fast search.
+Entries are stored as Markdown files with YAML frontmatter under `~/.ctx-hive/`, organized by scope. A JSON index enables fast search.
 
 ## Architecture
 

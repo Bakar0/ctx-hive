@@ -26,7 +26,7 @@ export interface Entry extends EntryMeta {
 
 // ── Paths ──────────────────────────────────────────────────────────────
 
-const HIVE_ROOT = join(homedir(), ".omni", "context-hive");
+const HIVE_ROOT = join(homedir(), ".ctx-hive");
 const ENTRIES_DIR = join(HIVE_ROOT, "entries");
 const INDEX_PATH = join(HIVE_ROOT, "index.json");
 

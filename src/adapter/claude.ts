@@ -72,7 +72,7 @@ export async function spawnClaude(options: SpawnClaudeOptions): Promise<ClaudeIn
   // Prevent recursive Claude Code invocations when spawned from within Claude Code
   delete env.CLAUDECODE;
 
-  const args = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
+  const args = ["claude", "-p", "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
   if (options.model !== undefined) {
     args.push("--model", options.model);
   }

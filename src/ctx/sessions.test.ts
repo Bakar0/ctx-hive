@@ -9,7 +9,7 @@ import {
   getSessionFilePaths,
 } from "./sessions.ts";
 
-const TEST_DIR = join(tmpdir(), `omni-sessions-test-${Date.now()}`);
+const TEST_DIR = join(tmpdir(), `ctx-hive-sessions-test-${Date.now()}`);
 
 afterAll(async () => {
   await rm(TEST_DIR, { recursive: true, force: true });

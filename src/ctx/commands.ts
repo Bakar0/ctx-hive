@@ -83,6 +83,14 @@ Subcommands:
     --all                        Skip selection, init all found repos
 
   update [path]                  Alias for init (auto-detects existing entries)
+
+  serve                          Start the daemon (watches for jobs)
+    --verbose                    Show detailed output
+    --port <n>                   Dashboard port (default: 3939)
+
+  enqueue <job-type>             Enqueue a job (reads payload from stdin)
+
+  install-hook                   Install SessionEnd hook into Claude settings
 `);
 }
 

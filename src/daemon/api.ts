@@ -1,0 +1,403 @@
+/**
+ * REST API endpoints for the ctx-hive dashboard.
+ * Provides read access to jobs, contexts (entries), and metrics.
+ */
+import { readFile } from "node:fs/promises";
+import { join, basename } from "node:path";
+import {
+  loadIndex,
+  deleteEntry,
+  resolveEntry,
+  hiveRoot,
+  parseFrontmatter,
+  type IndexEntry,
+  SCOPES,
+} from "../ctx/store.ts";
+import {
+  PENDING_DIR,
+  PROCESSING_DIR,
+  DONE_DIR,
+  FAILED_DIR,
+  listJobs,
+} from "./jobs.ts";
+import {
+  trackRepo,
+  untrackRepo,
+  updateLastScanned,
+} from "../repo/tracking.ts";
+import {
+  discoverRepos,
+  enrichTrackedRepos,
+} from "../repo/scanner.ts";
+import { broadcastRepoEvent } from "./ws.ts";
+
+// ── Types ─────────────────────────────────────────────────────────────
+
+export interface JobView {
+  filename: string;
+  status: "pending" | "processing" | "done" | "failed";
+  type: string;
+  createdAt: string;
+  sessionId?: string;
+  cwd?: string;
+  project?: string;
+  reason?: string;
+  error?: string;
+  failedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  duration_ms?: number;
+  transcriptTokens?: number;
+  entriesCreated?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
+export interface MetricsSnapshot {
+  timestamp: string;
+  jobs: {
+    pending: number;
+    processing: number;
+    done: number;
+    failed: number;
+    total: number;
+  };
+  contexts: {
+    total: number;
+    byScope: Record<string, number>;
+    byProject: Record<string, number>;
+  };
+  recentJobs: JobView[];
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+
+function openInTerminal(absPath: string): void {
+  const term = process.env.TERM_PROGRAM ?? "";
+  switch (term) {
+    case "iTerm.app":
+      Bun.spawn(["open", "-a", "iTerm", absPath]);
+      break;
+    case "WarpTerminal":
+      Bun.spawn(["open", "-a", "Warp", absPath]);
+      break;
+    case "Hyper":
+      Bun.spawn(["open", "-a", "Hyper", absPath]);
+      break;
+    case "kitty":
+      Bun.spawn(["kitty", "--single-instance", "--directory", absPath]);
+      break;
+    case "Alacritty":
+      Bun.spawn(["alacritty", "--working-directory", absPath]);
+      break;
+    case "WezTerm":
+      Bun.spawn(["wezterm", "start", "--cwd", absPath]);
+      break;
+    default:
+      Bun.spawn(["open", "-a", "Terminal", absPath]);
+  }
+}
+
+function projectFromCwd(cwd?: string): string {
+  if (cwd === undefined || cwd === "") return "unknown";
+  return basename(cwd);
+}
+
+interface RawJobFile {
+  type?: string;
+  createdAt?: string;
+  sessionId?: string;
+  cwd?: string;
+  reason?: string;
+  _error?: string;
+  _failedAt?: string;
+  _startedAt?: string;
+  _completedAt?: string;
+  _duration_ms?: number;
+  _transcriptTokens?: number;
+  _entriesCreated?: number;
+  _inputTokens?: number;
+  _outputTokens?: number;
+}
+
+async function loadJobsFromDir(
+  dir: string,
+  status: JobView["status"]
+): Promise<JobView[]> {
+  const paths = await listJobs(dir);
+  const jobs: JobView[] = [];
+  for (const p of paths) {
+    try {
+      const raw = await readFile(p, "utf-8");
+      const parsed: unknown = JSON.parse(raw);
+      // oxlint-disable-next-line no-unsafe-type-assertion -- job file schema
+      const data = parsed as RawJobFile;
+      jobs.push({
+        filename: basename(p),
+        status,
+        type: data.type ?? "unknown",
+        createdAt: data.createdAt ?? "",
+        sessionId: data.sessionId,
+        cwd: data.cwd,
+        project: projectFromCwd(data.cwd),
+        reason: data.reason,
+        error: data._error,
+        failedAt: data._failedAt,
+        startedAt: data._startedAt,
+        completedAt: data._completedAt,
+        duration_ms: data._duration_ms,
+        transcriptTokens: data._transcriptTokens,
+        entriesCreated: data._entriesCreated,
+        inputTokens: data._inputTokens,
+        outputTokens: data._outputTokens,
+      });
+    } catch {
+      // skip malformed
+    }
+  }
+  return jobs;
+}
+
+// ── API Functions ─────────────────────────────────────────────────────
+
+export async function getAllJobs(): Promise<JobView[]> {
+  const [pending, processing, done, failed] = await Promise.all([
+    loadJobsFromDir(PENDING_DIR, "pending"),
+    loadJobsFromDir(PROCESSING_DIR, "processing"),
+    loadJobsFromDir(DONE_DIR, "done"),
+    loadJobsFromDir(FAILED_DIR, "failed"),
+  ]);
+  const all = [...processing, ...pending, ...done, ...failed];
+  // Sort by createdAt descending
+  all.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  return all;
+}
+
+export async function getContexts(params: {
+  scope?: string;
+  project?: string;
+  sortBy?: "time" | "project";
+}): Promise<(IndexEntry & { body: string })[]> {
+  const index = await loadIndex();
+  let entries = [...index];
+
+  if (params.scope != null && params.scope !== "" && (SCOPES as readonly string[]).includes(params.scope)) {
+    entries = entries.filter((e) => e.scope === params.scope);
+  }
+  if (params.project != null && params.project !== "") {
+    entries = entries.filter((e) => e.project === params.project);
+  }
+
+  // Load bodies
+  const root = hiveRoot();
+  const full = await Promise.all(
+    entries.map(async (e) => {
+      try {
+        const raw = await Bun.file(join(root, e.path)).text();
+        const { body } = parseFrontmatter(raw);
+        return { ...e, body };
+      } catch {
+        return { ...e, body: "" };
+      }
+    })
+  );
+
+  if (params.sortBy === "project") {
+    full.sort((a, b) => a.project.localeCompare(b.project) || b.updated.localeCompare(a.updated));
+  } else {
+    // default: sort by time (updated) descending
+    full.sort((a, b) => b.updated.localeCompare(a.updated));
+  }
+
+  return full;
+}
+
+export async function getMetrics(): Promise<MetricsSnapshot> {
+  const [allJobs, index] = await Promise.all([getAllJobs(), loadIndex()]);
+
+  const counts = { pending: 0, processing: 0, done: 0, failed: 0 };
+  for (const j of allJobs) {
+    counts[j.status]++;
+  }
+
+  const byScope: Record<string, number> = {};
+  const byProject: Record<string, number> = {};
+  for (const e of index) {
+    byScope[e.scope] = (byScope[e.scope] ?? 0) + 1;
+    if (e.project) {
+      byProject[e.project] = (byProject[e.project] ?? 0) + 1;
+    }
+  }
+
+  return {
+    timestamp: new Date().toISOString(),
+    jobs: { ...counts, total: allJobs.length },
+    contexts: { total: index.length, byScope, byProject },
+    recentJobs: allJobs.slice(0, 20),
+  };
+}
+
+export async function deleteContextById(idOrSlug: string): Promise<boolean> {
+  const resolved = await resolveEntry(idOrSlug);
+  if (!resolved) return false;
+  await deleteEntry(resolved.scope, resolved.slug);
+  return true;
+}
+
+// ── Router ────────────────────────────────────────────────────────────
+
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
+export async function handleApiRequest(req: Request, url: URL): Promise<Response | null> {
+  const path = url.pathname;
+
+  // CORS preflight
+  if (req.method === "OPTIONS") {
+    return new Response(null, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }
+
+  // GET /api/metrics
+  if (path === "/api/metrics" && req.method === "GET") {
+    return json(await getMetrics());
+  }
+
+  // GET /api/jobs
+  if (path === "/api/jobs" && req.method === "GET") {
+    return json(await getAllJobs());
+  }
+
+  // GET /api/contexts?scope=...&project=...&sortBy=time|project
+  if (path === "/api/contexts" && req.method === "GET") {
+    const scope = url.searchParams.get("scope") ?? undefined;
+    const project = url.searchParams.get("project") ?? undefined;
+    const sortByParam = url.searchParams.get("sortBy");
+    const sortBy = sortByParam === "project" ? "project" : "time";
+    return json(await getContexts({ scope, project, sortBy }));
+  }
+
+  // DELETE /api/contexts/:id
+  const deleteMatch = /^\/api\/contexts\/(.+)$/.exec(path);
+  if (deleteMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(deleteMatch[1]!);
+    const deleted = await deleteContextById(id);
+    if (deleted) return json({ ok: true });
+    return json({ error: "Not found" }, 404);
+  }
+
+  // GET /api/projects — unique project list
+  if (path === "/api/projects" && req.method === "GET") {
+    const index = await loadIndex();
+    const projects = [...new Set(index.map((e) => e.project).filter(Boolean))].sort();
+    return json(projects);
+  }
+
+  // ── Repo endpoints ───────────────────────────────────────────────────
+
+  // GET /api/repos — list tracked repos (enriched)
+  if (path === "/api/repos" && req.method === "GET") {
+    return json(await enrichTrackedRepos());
+  }
+
+  // GET /api/repos/scan?root=...&depth=...
+  if (path === "/api/repos/scan" && req.method === "GET") {
+    const root = url.searchParams.get("root") ?? "~/";
+    const depth = parseInt(url.searchParams.get("depth") ?? "4", 10);
+    try {
+      return json(await discoverRepos(root, depth));
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : "Scan failed" }, 400);
+    }
+  }
+
+  // POST /api/repos/track
+  if (path === "/api/repos/track" && req.method === "POST") {
+    try {
+      const rawBody: unknown = await req.json();
+      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
+      const body = rawBody as { absPath?: string };
+      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
+      const tracked = await trackRepo(body.absPath);
+      broadcastRepoEvent("repo:tracked", tracked);
+      return json(tracked);
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : "Track failed" }, 400);
+    }
+  }
+
+  // POST /api/repos/untrack
+  if (path === "/api/repos/untrack" && req.method === "POST") {
+    try {
+      const rawBody: unknown = await req.json();
+      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
+      const body = rawBody as { absPath?: string };
+      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
+      const removed = await untrackRepo(body.absPath);
+      if (!removed) return json({ error: "Not tracked" }, 404);
+      broadcastRepoEvent("repo:untracked", { absPath: body.absPath });
+      return json({ ok: true });
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : "Untrack failed" }, 400);
+    }
+  }
+
+  // POST /api/repos/sync — full context sync (enqueues init-style job)
+  if (path === "/api/repos/sync" && req.method === "POST") {
+    try {
+      const rawBody: unknown = await req.json();
+      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
+      const body = rawBody as { absPath?: string };
+      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
+      await updateLastScanned(body.absPath);
+      const { ensureJobDirs, writeJob, PENDING_DIR: pendingDir } = await import("./jobs.ts");
+      await ensureJobDirs();
+      const repoName = basename(body.absPath);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const syncJob = {
+        type: "repo-sync" as const,
+        repoPath: body.absPath,
+        cwd: body.absPath,
+        createdAt: new Date().toISOString(),
+      };
+      await writeJob(pendingDir, syncJob, `${timestamp}-sync-${repoName}.json`);
+      return json({ ok: true, message: "Sync job enqueued" });
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : "Sync failed" }, 400);
+    }
+  }
+
+  // POST /api/repos/open — open repo in VS Code or terminal
+  if (path === "/api/repos/open" && req.method === "POST") {
+    try {
+      const rawBody: unknown = await req.json();
+      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
+      const body = rawBody as { absPath?: string; target?: string };
+      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
+      if (body.target === "vscode") {
+        Bun.spawn(["code", body.absPath]);
+      } else if (body.target === "terminal") {
+        openInTerminal(body.absPath);
+      } else {
+        return json({ error: "target must be 'vscode' or 'terminal'" }, 400);
+      }
+      return json({ ok: true });
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : "Open failed" }, 400);
+    }
+  }
+
+  return null; // not an API route
+}

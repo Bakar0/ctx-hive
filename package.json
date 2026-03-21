@@ -10,7 +10,7 @@
     "dev": "bun run src/index.ts",
     "build": "bun build ./src/index.ts --compile --outfile ctx-hive",
     "build:linux-x64": "bun build ./src/index.ts --compile --target=bun-linux-x64 --outfile ctx-hive-linux-x64",
-    "deploy": "bun run build && sudo cp ctx-hive /usr/local/bin/ctx-hive",
+    "deploy": "bun run build && cp ctx-hive ~/.local/bin/ctx-hive",
     "lint": "oxlint --type-aware",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test"

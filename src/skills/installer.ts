@@ -1,7 +1,7 @@
 import { access, mkdir } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { SKILL_ASSETS } from "./skill-assets";
+import { SKILL_ASSETS } from "./assets";
 
 const SKILLS_TARGET_DIR = resolve(homedir(), ".claude", "skills");
 

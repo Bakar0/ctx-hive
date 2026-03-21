@@ -1,4 +1,4 @@
-import { spawnClaude, type SpawnClaudeOptions } from "../adapter/claude.ts";
+import { spawnClaude, type SpawnClaudeOptions } from "./claude.ts";
 
 export interface PipelineTask<T> {
   name: string;

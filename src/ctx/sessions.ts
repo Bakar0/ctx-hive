@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { encodePath, projectSessionDir } from "../shared/claude-paths.ts";
+import { encodePath, projectSessionDir } from "../adapter/claude-paths.ts";
 
 // ── Path encoding ──────────────────────────────────────────────────────
 

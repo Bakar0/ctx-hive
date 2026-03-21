@@ -1,5 +1,5 @@
 import { appendFile } from "node:fs/promises";
-import { ensureLogsDir, buildLogPath } from "../utils/logs.ts";
+import { ensureLogsDir, buildLogPath } from "./logs.ts";
 
 export interface ClaudeResult {
   result: string;

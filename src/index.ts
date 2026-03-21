@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { ctx } from "./ctx/commands.ts";
-import { installSkills, checkSkillsInstalled } from "./utils/skill-installer.ts";
+import { installSkills, checkSkillsInstalled } from "./skills/installer.ts";
 
 const { version } = await import("../package.json");
 const args = process.argv.slice(2);

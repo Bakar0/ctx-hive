@@ -57,7 +57,7 @@ export async function runParallel<T>(tasks: PipelineTask<T>[]): Promise<PhaseSum
         return {
           name: task.name,
           logPath: instance.logPath,
-          error: `Agent '${task.name}' failed: ${err}`,
+          error: `Agent '${task.name}' failed: ${err instanceof Error ? err.message : String(err)}`,
           cost_usd: 0,
           duration_ms: 0,
         } satisfies PipelineResult<T>;

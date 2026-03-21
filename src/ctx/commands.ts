@@ -1,16 +1,15 @@
 import {
   ensureCtxDir,
   generateId,
-  slugify,
   writeEntry,
   readEntry,
   deleteEntry,
   loadIndex,
   rebuildIndex,
   resolveEntry,
-  type Scope,
   type EntryMeta,
   SCOPES,
+  isScope,
   hiveRoot,
 } from "./store.ts";
 import { search, formatHuman, formatJson, formatMarkdown } from "./search.ts";
@@ -30,7 +29,7 @@ function hasFlag(args: string[], flag: string): boolean {
 }
 
 function parseTags(raw: string | undefined): string[] {
-  if (!raw) return [];
+  if (raw === undefined || raw === "") return [];
   return raw
     .split(",")
     .map((t) => t.trim())
@@ -91,24 +90,25 @@ Subcommands:
 
 async function ctxAdd(args: string[]): Promise<void> {
   const title = getFlag(args, "--title");
-  if (!title) {
+  if (title === undefined) {
     console.error("Error: --title is required");
     process.exit(1);
   }
 
-  const scope = (getFlag(args, "--scope") || "personal") as Scope;
-  if (!SCOPES.includes(scope)) {
-    console.error(`Error: invalid scope "${scope}". Must be one of: ${SCOPES.join(", ")}`);
+  const scopeRaw = getFlag(args, "--scope") ?? "personal";
+  if (!isScope(scopeRaw)) {
+    console.error(`Error: invalid scope "${scopeRaw}". Must be one of: ${SCOPES.join(", ")}`);
     process.exit(1);
   }
+  const scope = scopeRaw;
 
   const tags = parseTags(getFlag(args, "--tags"));
-  const project = getFlag(args, "--project") || "";
+  const project = getFlag(args, "--project") ?? "";
 
   // Get body from --body, --file, or stdin
-  let body = getFlag(args, "--body") || "";
+  let body = getFlag(args, "--body") ?? "";
   const filePath = getFlag(args, "--file");
-  if (filePath) {
+  if (filePath !== undefined) {
     const file = Bun.file(filePath);
     if (!(await file.exists())) {
       console.error(`Error: file not found: ${filePath}`);
@@ -117,7 +117,7 @@ async function ctxAdd(args: string[]): Promise<void> {
     body = await file.text();
   }
 
-  if (!body) {
+  if (body === "") {
     console.error("Error: provide --body or --file for entry content");
     process.exit(1);
   }
@@ -140,16 +140,17 @@ async function ctxAdd(args: string[]): Promise<void> {
 async function ctxSearch(args: string[]): Promise<void> {
   // Query is the first non-flag argument after "search"
   const query = args.find((a) => !a.startsWith("--") && a !== "search");
-  if (!query) {
+  if (query === undefined) {
     console.error("Error: search query required. Usage: ctx-hive search <query>");
     process.exit(1);
   }
 
-  const scope = getFlag(args, "--scope") as Scope | undefined;
+  const scopeFlag = getFlag(args, "--scope");
+  const scope = scopeFlag !== undefined && isScope(scopeFlag) ? scopeFlag : undefined;
   const tags = parseTags(getFlag(args, "--tags"));
   const project = getFlag(args, "--project");
-  const limit = parseInt(getFlag(args, "--limit") || "10", 10);
-  const format = getFlag(args, "--format") || "human";
+  const limit = parseInt(getFlag(args, "--limit") ?? "10", 10);
+  const format = getFlag(args, "--format") ?? "human";
 
   const results = await search(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit);
 
@@ -166,8 +167,9 @@ async function ctxList(args: string[]): Promise<void> {
   const index = await loadIndex();
 
   let entries = index;
-  const scope = getFlag(args, "--scope") as Scope | undefined;
-  if (scope) entries = entries.filter((e) => e.scope === scope);
+  const scopeFlag = getFlag(args, "--scope");
+  const scope = scopeFlag !== undefined && isScope(scopeFlag) ? scopeFlag : undefined;
+  if (scope !== undefined) entries = entries.filter((e) => e.scope === scope);
 
   const tags = parseTags(getFlag(args, "--tags"));
   if (tags.length > 0) {
@@ -178,7 +180,7 @@ async function ctxList(args: string[]): Promise<void> {
   }
 
   const project = getFlag(args, "--project");
-  if (project) entries = entries.filter((e) => e.project === project);
+  if (project !== undefined) entries = entries.filter((e) => e.project === project);
 
   if (entries.length === 0) {
     console.log("No entries found.");
@@ -193,13 +195,13 @@ async function ctxList(args: string[]): Promise<void> {
 
 async function ctxShow(args: string[]): Promise<void> {
   const idOrSlug = args.find((a) => !a.startsWith("--") && a !== "show");
-  if (!idOrSlug) {
+  if (idOrSlug === undefined) {
     console.error("Error: provide an id or slug. Usage: ctx-hive show <id-or-slug>");
     process.exit(1);
   }
 
   const resolved = await resolveEntry(idOrSlug);
-  if (!resolved) {
+  if (resolved === null) {
     console.error(`Error: entry not found: ${idOrSlug}`);
     process.exit(1);
   }
@@ -211,18 +213,18 @@ async function ctxShow(args: string[]): Promise<void> {
 
 async function ctxEdit(args: string[]): Promise<void> {
   const idOrSlug = args.find((a) => !a.startsWith("--") && a !== "edit");
-  if (!idOrSlug) {
+  if (idOrSlug === undefined) {
     console.error("Error: provide an id or slug. Usage: ctx-hive edit <id-or-slug>");
     process.exit(1);
   }
 
   const resolved = await resolveEntry(idOrSlug);
-  if (!resolved) {
+  if (resolved === null) {
     console.error(`Error: entry not found: ${idOrSlug}`);
     process.exit(1);
   }
 
-  const editor = process.env.EDITOR || "vi";
+  const editor = process.env.EDITOR ?? "vi";
   const filePath = join(hiveRoot(), "entries", resolved.scope, `${resolved.slug}.md`);
 
   const proc = Bun.spawn([editor, filePath], {
@@ -246,13 +248,13 @@ async function ctxEdit(args: string[]): Promise<void> {
 
 async function ctxDelete(args: string[]): Promise<void> {
   const idOrSlug = args.find((a) => !a.startsWith("--") && a !== "delete");
-  if (!idOrSlug) {
+  if (idOrSlug === undefined) {
     console.error("Error: provide an id or slug. Usage: ctx-hive delete <id-or-slug>");
     process.exit(1);
   }
 
   const resolved = await resolveEntry(idOrSlug);
-  if (!resolved) {
+  if (resolved === null) {
     console.error(`Error: entry not found: ${idOrSlug}`);
     process.exit(1);
   }
@@ -283,7 +285,7 @@ async function ctxRebuildIndex(): Promise<void> {
 export async function ctx(args: string[]): Promise<void> {
   const subcommand = args[0];
 
-  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+  if (subcommand === undefined || subcommand === "--help" || subcommand === "-h") {
     printCtxHelp();
     return;
   }

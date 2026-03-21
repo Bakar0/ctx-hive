@@ -6,7 +6,6 @@ import {
   scanForRepos,
   resolveRepoMeta,
   gatherRepoContext,
-  checkExistingContext,
   buildRepoPrompt,
   buildSessionPrompt,
 } from "./init.ts";

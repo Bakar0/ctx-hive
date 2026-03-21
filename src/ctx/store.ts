@@ -32,6 +32,10 @@ const INDEX_PATH = join(HIVE_ROOT, "index.json");
 
 export const SCOPES: Scope[] = ["project", "org", "personal"];
 
+export function isScope(value: string): value is Scope {
+  return (SCOPES as string[]).includes(value);
+}
+
 export function hiveRoot() {
   return HIVE_ROOT;
 }
@@ -73,8 +77,8 @@ export function slugify(title: string): string {
 // ── Frontmatter parsing ────────────────────────────────────────────────
 
 export function parseFrontmatter(raw: string): { meta: EntryMeta; body: string } {
-  const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-  if (!match) throw new Error("Invalid entry: missing frontmatter");
+  const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+  if (match === null) throw new Error("Invalid entry: missing frontmatter");
 
   const [, yamlBlock = "", bodyRaw = ""] = match;
   const body = bodyRaw.trim();
@@ -103,15 +107,19 @@ export function parseFrontmatter(raw: string): { meta: EntryMeta; body: string }
     meta[key] = value;
   }
 
+  const str = (key: string): string =>
+    typeof meta[key] === "string" ? meta[key] : "";
+  const scopeVal = str("scope");
+
   return {
     meta: {
-      id: (meta.id as string) || "",
-      title: (meta.title as string) || "",
-      scope: (meta.scope as Scope) || "personal",
-      tags: Array.isArray(meta.tags) ? meta.tags : [],
-      project: (meta.project as string) || "",
-      created: (meta.created as string) || "",
-      updated: (meta.updated as string) || "",
+      id: str("id"),
+      title: str("title"),
+      scope: isScope(scopeVal) ? scopeVal : "personal",
+      tags: Array.isArray(meta.tags) ? (meta.tags as unknown[]).filter((t): t is string => typeof t === "string") : [],
+      project: str("project"),
+      created: str("created"),
+      updated: str("updated"),
     },
     body,
   };
@@ -196,7 +204,7 @@ export async function rebuildIndex(): Promise<IndexEntry[]> {
         const { meta } = parseFrontmatter(raw);
         entries.push({
           ...meta,
-          path: relativeEntryPath(scope as Scope, slug),
+          path: relativeEntryPath(scope, slug),
         });
       } catch {
         // Skip malformed entries
@@ -213,7 +221,9 @@ export async function loadIndex(): Promise<IndexEntry[]> {
   if (!(await file.exists())) {
     return rebuildIndex();
   }
-  return file.json();
+  const data: unknown = await file.json();
+  // oxlint-disable-next-line no-unsafe-type-assertion -- index.json is self-managed
+  return data as IndexEntry[];
 }
 
 // ── Lookup by ID or slug ───────────────────────────────────────────────

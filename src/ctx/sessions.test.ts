@@ -1,7 +1,7 @@
 import { test, expect, afterAll } from "bun:test";
 import { rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import {
   encodeSessionPath,
   repoToSessionDir,
@@ -64,7 +64,7 @@ test("getSessionFilePaths returns top N paths for a repo", async () => {
   await mkdir(fakeRepo, { recursive: true });
 
   const encoded = fakeRepo.replace(/\//g, "-");
-  const sessionDir = join(require("os").homedir(), ".claude", "projects", encoded);
+  const sessionDir = join(homedir(), ".claude", "projects", encoded);
   await mkdir(sessionDir, { recursive: true });
 
   for (let i = 0; i < 5; i++) {

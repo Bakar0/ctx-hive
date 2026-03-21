@@ -120,7 +120,7 @@ function renderCheckboxList(repos: RepoInfo[], checked: boolean[], cursor: numbe
   const header = `${BOLD}Select repos to initialize${RESET}  ${DIM}(↑↓ move · space toggle · a all · enter confirm · q quit)${RESET}\n`;
   const rows = repos.map((repo, i) => {
     const isCursor = i === cursor;
-    const isChecked = checked[i];
+    const isChecked = checked[i] === true;
     const dot = isChecked ? `${CYAN}◉${RESET}` : `${DIM}○${RESET}`;
     const arrow = isCursor ? `${GREEN}>${RESET}` : " ";
     const name = repo.name.padEnd(24);
@@ -152,7 +152,7 @@ async function simpleSelect(repos: RepoInfo[]): Promise<RepoInfo[]> {
   const { value } = await reader.read();
   reader.releaseLock();
   const answer = new TextDecoder().decode(value).trim().toLowerCase();
-  if (!answer || answer === "all") return repos;
+  if (answer === "" || answer === "all") return repos;
   const indices = answer
     .split(",")
     .map((s) => parseInt(s.trim(), 10) - 1)
@@ -227,13 +227,13 @@ export async function interactiveSelect(repos: RepoInfo[]): Promise<RepoInfo[]> 
       if (key === "\r" || key === "\n") {
         restoreTerminal();
         process.stdin.off("data", onData);
-        resolve(repos.filter((_, i) => checked[i]));
+        resolve(repos.filter((_, i) => checked[i] === true));
         return;
       }
 
       // Space — toggle current
       if (key === " ") {
-        checked[cursor] = !checked[cursor];
+        checked[cursor] = checked[cursor] !== true;
       }
 
       // Arrow up
@@ -279,13 +279,13 @@ export async function resolveRepoMeta(repoPath: string): Promise<RepoMeta> {
     await proc.exited;
 
     const remoteUrl = text.trim();
-    if (!remoteUrl) return fallback;
+    if (remoteUrl === "") return fallback;
 
     // Parse org/name from URL
     // ssh: git@github.com:org/repo.git
     // https: https://github.com/org/repo.git
-    const sshMatch = remoteUrl.match(/[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
-    if (sshMatch) {
+    const sshMatch = /[:/]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remoteUrl);
+    if (sshMatch !== null) {
       return { name: sshMatch[2]!, org: sshMatch[1]!, remoteUrl };
     }
 
@@ -373,14 +373,14 @@ export function buildRepoPrompt(
   const sections: string[] = [];
 
   sections.push(`# Repo Analyzer: ${meta.name}`);
-  sections.push(`\nOrg: ${meta.org || "(unknown)"}`);
-  if (meta.remoteUrl) sections.push(`Remote: ${meta.remoteUrl}`);
+  sections.push(`\nOrg: ${meta.org !== "" ? meta.org : "(unknown)"}`);
+  if (meta.remoteUrl !== "") sections.push(`Remote: ${meta.remoteUrl}`);
 
-  if (repoContext.readme) {
+  if (repoContext.readme !== "") {
     sections.push(`\n## README.md\n\n${repoContext.readme}`);
   }
 
-  if (repoContext.claudeMd) {
+  if (repoContext.claudeMd !== "") {
     sections.push(`\n## CLAUDE.md\n\n${repoContext.claudeMd}`);
   }
 
@@ -513,13 +513,13 @@ async function processRepo(
 
   // 1. Resolve metadata
   const meta = await resolveRepoMeta(repo.absPath);
-  if (verbose) console.log(`  Org: ${meta.org || "(none)"}, Remote: ${meta.remoteUrl || "(none)"}`);
+  if (verbose) console.log(`  Org: ${meta.org !== "" ? meta.org : "(none)"}, Remote: ${meta.remoteUrl !== "" ? meta.remoteUrl : "(none)"}`);
 
   // 2. Gather repo context
   const repoContext = await gatherRepoContext(repo.absPath);
   if (verbose) {
-    console.log(`  README: ${repoContext.readme ? "found" : "none"}`);
-    console.log(`  CLAUDE.md: ${repoContext.claudeMd ? "found" : "none"}`);
+    console.log(`  README: ${repoContext.readme !== "" ? "found" : "none"}`);
+    console.log(`  CLAUDE.md: ${repoContext.claudeMd !== "" ? "found" : "none"}`);
   }
 
   // 3. Check existing context
@@ -547,7 +547,7 @@ async function processRepo(
     console.log(`${"─".repeat(60)}`);
     console.log(`\n── Agent 1: Repo Analyzer ──\n`);
     console.log(repoPrompt);
-    if (sessionPrompt) {
+    if (sessionPrompt !== null) {
       console.log(`\n── Agent 2: Session Miner ──\n`);
       console.log(sessionPrompt);
     } else {
@@ -571,7 +571,7 @@ async function processRepo(
     },
   ];
 
-  if (sessionPrompt) {
+  if (sessionPrompt !== null) {
     tasks.push({
       name: `session-miner-${repo.name}`,
       options: {
@@ -595,7 +595,7 @@ async function processRepo(
 
     const errors: string[] = [];
     for (const r of result.results) {
-      if (r.error) {
+      if (r.error !== undefined) {
         console.error(`  ✗ ${r.name}: ${r.error}`);
         errors.push(`${r.name}: ${r.error}`);
       } else if (verbose) {
@@ -621,13 +621,13 @@ async function processRepo(
 
 export async function ctxInit(args: string[]): Promise<void> {
   const noSessions = hasFlag(args, "--no-sessions");
-  const maxSessions = parseInt(getFlag(args, "--max-sessions") || "10", 10);
+  const maxSessions = parseInt(getFlag(args, "--max-sessions") ?? "10", 10);
   const dryRun = hasFlag(args, "--dry-run");
   const verbose = hasFlag(args, "--verbose");
   const all = hasFlag(args, "--all");
 
   // Determine root path: first non-flag arg, or cwd
-  const rootPath = args.find((a) => !a.startsWith("--") && a !== "init" && a !== "update") || process.cwd();
+  const rootPath = args.find((a) => !a.startsWith("--") && a !== "init" && a !== "update") ?? process.cwd();
 
   // 1. Scan for repos
   if (verbose) console.log(`Scanning for repos in: ${rootPath}`);

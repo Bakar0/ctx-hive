@@ -108,7 +108,7 @@ export async function search(
       filterTags.some((ft) => e.tags.map((t) => t.toLowerCase()).includes(ft))
     );
   }
-  if (filters.project) {
+  if (filters.project !== undefined) {
     candidates = candidates.filter((e) => e.project === filters.project);
   }
 
@@ -128,8 +128,8 @@ export async function search(
     const score = scoreEntry(tokens, entry, content);
     if (score > 0) {
       // Extract body (after frontmatter) for excerpt
-      const bodyMatch = content.match(/^---\n[\s\S]*?\n---\n?([\s\S]*)$/);
-      const body = bodyMatch ? (bodyMatch[1] ?? "").trim() : content;
+      const bodyMatch = /^---\n[\s\S]*?\n---\n?([\s\S]*)$/.exec(content);
+      const body = bodyMatch !== null ? (bodyMatch[1] ?? "").trim() : content;
 
       results.push({
         ...entry,

@@ -29,8 +29,38 @@ export interface SpawnClaudeOptions {
   logsDir?: string;
 }
 
+// Stream message types from Claude CLI
+interface ContentBlock {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+}
+
+interface StreamMessage {
+  type: string;
+  message?: { content?: ContentBlock[] };
+  is_error?: boolean;
+  result?: string;
+  duration_ms?: number;
+  duration_api_ms?: number;
+  total_cost_usd?: number;
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+  };
+}
+
+function isStreamMessage(value: unknown): value is StreamMessage {
+  if (typeof value !== "object" || value === null || !("type" in value)) return false;
+  return typeof value.type === "string";
+}
+
 export async function spawnClaude(options: SpawnClaudeOptions): Promise<ClaudeInstance> {
-  if (!Bun.which("claude")) {
+  if (Bun.which("claude") === null) {
     throw new Error("'claude' CLI not found in PATH. Install it first.");
   }
 
@@ -43,10 +73,10 @@ export async function spawnClaude(options: SpawnClaudeOptions): Promise<ClaudeIn
   delete env.CLAUDECODE;
 
   const args = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
-  if (options.model) {
+  if (options.model !== undefined) {
     args.push("--model", options.model);
   }
-  if (options.allowedTools && options.allowedTools.length > 0) {
+  if (options.allowedTools !== undefined && options.allowedTools.length > 0) {
     args.push("--allowedTools", options.allowedTools.join(","));
   }
   args.push("--", options.prompt);
@@ -67,6 +97,22 @@ export async function spawnClaude(options: SpawnClaudeOptions): Promise<ClaudeIn
   };
 }
 
+function parseResultFromMsg(msg: StreamMessage): ClaudeResult | undefined {
+  if (msg.type !== "result" || msg.result === undefined || msg.usage === undefined) return undefined;
+  return {
+    result: msg.result,
+    duration_ms: msg.duration_ms ?? 0,
+    duration_api_ms: msg.duration_api_ms ?? 0,
+    total_cost_usd: msg.total_cost_usd ?? 0,
+    usage: {
+      input_tokens: msg.usage.input_tokens,
+      output_tokens: msg.usage.output_tokens,
+      cache_creation_input_tokens: msg.usage.cache_creation_input_tokens,
+      cache_read_input_tokens: msg.usage.cache_read_input_tokens,
+    },
+  };
+}
+
 async function processStream(
   proc: ReturnType<typeof Bun.spawn>,
   logPath: string,
@@ -78,6 +124,7 @@ async function processStream(
   // Create the log file immediately so tail -f can attach
   await Bun.write(logPath, "");
 
+  // oxlint-disable-next-line no-unsafe-type-assertion -- Bun.spawn with stdout:"pipe" returns ReadableStream
   const stdout = proc.stdout as ReadableStream<Uint8Array>;
   const reader = stdout.getReader();
   const decoder = new TextDecoder();
@@ -85,21 +132,24 @@ async function processStream(
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done === true) break;
 
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      if (!line.trim()) continue;
+      if (line.trim() === "") continue;
       try {
-        const msg = JSON.parse(line);
+        const parsed: unknown = JSON.parse(line);
+        if (!isStreamMessage(parsed)) continue;
+        const msg = parsed;
 
-        if (msg.type === "assistant" && msg.message?.content) {
-          const fullText = msg.message.content
-            .filter((b: { type: string }) => b.type === "text")
-            .map((b: { text: string }) => b.text)
+        if (msg.type === "assistant" && msg.message !== undefined && Array.isArray(msg.message.content)) {
+          const content = msg.message.content;
+          const fullText = content
+            .filter((b) => b.type === "text" && b.text !== undefined)
+            .map((b) => b.text!)
             .join("");
 
           if (fullText.length > lastWrittenLength) {
@@ -108,28 +158,18 @@ async function processStream(
             lastWrittenLength = fullText.length;
           }
 
-          for (const block of msg.message.content) {
-            if (block.type === "tool_use" && !seenToolUseIds.has(block.id)) {
+          for (const block of content) {
+            if (block.type === "tool_use" && block.id !== undefined && !seenToolUseIds.has(block.id)) {
               seenToolUseIds.add(block.id);
-              await appendFile(logPath, `\n[tool_use] ${block.name} ${JSON.stringify(block.input)}\n`);
+              await appendFile(logPath, `\n[tool_use] ${block.name ?? "unknown"} ${JSON.stringify(block.input)}\n`);
             }
           }
         } else if (msg.type === "tool_result") {
-          const status = msg.is_error ? "error" : "success";
+          const status = msg.is_error === true ? "error" : "success";
           await appendFile(logPath, `[tool_result] → ${status}\n`);
-        } else if (msg.type === "result") {
-          claudeResult = {
-            result: msg.result,
-            duration_ms: msg.duration_ms,
-            duration_api_ms: msg.duration_api_ms,
-            total_cost_usd: msg.total_cost_usd,
-            usage: {
-              input_tokens: msg.usage.input_tokens,
-              output_tokens: msg.usage.output_tokens,
-              cache_creation_input_tokens: msg.usage.cache_creation_input_tokens,
-              cache_read_input_tokens: msg.usage.cache_read_input_tokens,
-            },
-          };
+        } else {
+          const result = parseResultFromMsg(msg);
+          if (result !== undefined) claudeResult = result;
         }
       } catch {
         // skip unparseable lines
@@ -138,22 +178,12 @@ async function processStream(
   }
 
   // Process remaining buffer
-  if (buffer.trim()) {
+  if (buffer.trim() !== "") {
     try {
-      const msg = JSON.parse(buffer);
-      if (msg.type === "result") {
-        claudeResult = {
-          result: msg.result,
-          duration_ms: msg.duration_ms,
-          duration_api_ms: msg.duration_api_ms,
-          total_cost_usd: msg.total_cost_usd,
-          usage: {
-            input_tokens: msg.usage.input_tokens,
-            output_tokens: msg.usage.output_tokens,
-            cache_creation_input_tokens: msg.usage.cache_creation_input_tokens,
-            cache_read_input_tokens: msg.usage.cache_read_input_tokens,
-          },
-        };
+      const parsed: unknown = JSON.parse(buffer);
+      if (isStreamMessage(parsed)) {
+        const result = parseResultFromMsg(parsed);
+        if (result !== undefined) claudeResult = result;
       }
     } catch {
       // skip
@@ -161,7 +191,7 @@ async function processStream(
   }
 
   // Fallback: if no partial messages were written, use result.result
-  if (lastWrittenLength === 0 && claudeResult?.result) {
+  if (lastWrittenLength === 0 && claudeResult !== undefined && claudeResult.result !== "") {
     await Bun.write(logPath, claudeResult.result);
   }
 

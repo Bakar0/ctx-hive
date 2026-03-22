@@ -238,6 +238,65 @@
   .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 0; }
   .pagination-info { font-size: 12px; color: var(--text2); font-family: var(--font); }
   .pagination .btn:disabled { opacity: 0.35; cursor: default; }
+
+  /* ── Contexts page enhancements ────────────────────────────── */
+  .filter-input { background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); padding: 6px 10px; font-size: 12px;
+    outline: none; min-width: 180px; }
+  .filter-input:focus { border-color: var(--accent); }
+  .filter-input::placeholder { color: var(--text3); }
+
+  .score-bar-inline { height: 4px; width: 48px; background: var(--bg3);
+    border-radius: 2px; overflow: hidden; display: inline-block; vertical-align: middle;
+    margin-left: 6px; }
+  .score-bar-inline-fill { height: 100%; border-radius: 2px; }
+
+  .sparkline-mini { display: flex; align-items: flex-end; gap: 1px; height: 20px; }
+  .sparkline-mini .spark-bar { flex: 1; background: var(--accent); border-radius: 1px;
+    min-height: 0; opacity: 0.7; }
+
+  .sparkline-wide { display: flex; align-items: flex-end; gap: 1px; height: 40px;
+    margin-top: 8px; }
+  .sparkline-wide .spark-bar { flex: 1; background: var(--accent); border-radius: 1px;
+    min-height: 0; opacity: 0.7; }
+
+  .body-preview { font-size: 11px; color: var(--text3); margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 400px; }
+
+  .ctx-row-low td:first-child { border-left: 3px solid var(--red); }
+  .ctx-row-stale td:first-child { border-left: 3px solid var(--yellow); }
+
+  .stacked-bar { display: flex; height: 20px; border-radius: 4px; overflow: hidden;
+    background: var(--bg3); }
+  .stacked-segment { height: 100%; min-width: 2px; transition: width 0.3s; }
+  .scope-health-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .scope-health-label { font-size: 12px; color: var(--text2); min-width: 64px;
+    font-family: var(--font); }
+  .scope-health-bar { flex: 1; }
+  .scope-health-count { font-size: 11px; color: var(--text3); min-width: 28px;
+    text-align: right; font-family: var(--font); }
+
+  .quick-stats { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .quick-stat { display: flex; flex-direction: column; align-items: center;
+    padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; min-width: 80px; }
+  .quick-stat-value { font-size: 18px; font-weight: 700; font-family: var(--font); }
+  .quick-stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 0.3px; margin-top: 2px; }
+
+  .eval-summary { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px;
+    font-size: 12px; color: var(--text2); }
+  .eval-summary-item { display: flex; align-items: center; gap: 4px; }
+
+  .btn-copy { background: none; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text2); cursor: pointer; padding: 4px 8px; font-size: 11px;
+    transition: all 0.15s; }
+  .btn-copy:hover { background: var(--bg3); color: var(--text); }
+
+  .ctx-title-cell { max-width: 380px; }
+  .ctx-title-text { font-weight: 500; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; max-width: 380px; display: block; }
+  .ctx-tags-inline { margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -359,7 +418,24 @@
         <p>Browse and manage your stored context entries</p>
       </div>
 
+      <!-- Zone A: Stats -->
+      <div class="stats" id="ctx-stats"></div>
+
+      <!-- Zone B: Charts -->
+      <div class="charts" id="ctx-charts-row">
+        <div class="chart-card">
+          <div class="chart-title">Score Distribution</div>
+          <div id="ctx-chart-scores" class="bar-chart"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Scope Health</div>
+          <div id="ctx-chart-scope-health"></div>
+        </div>
+      </div>
+
+      <!-- Zone C: Filters -->
       <div class="filters" style="margin-bottom: 16px;">
+        <input class="filter-input" type="text" id="ctx-search" placeholder="Search titles, tags, body...">
         <select class="filter-select" id="ctx-scope-filter">
           <option value="">All scopes</option>
           <option value="project">Project</option>
@@ -369,18 +445,46 @@
         <select class="filter-select" id="ctx-project-filter">
           <option value="">All projects</option>
         </select>
+        <select class="filter-select" id="ctx-tag-filter">
+          <option value="">All tags</option>
+        </select>
+        <select class="filter-select" id="ctx-score-filter">
+          <option value="">All scores</option>
+          <option value="high">High (&ge; 0.6)</option>
+          <option value="mid">Mid (0.3 &ndash; 0.6)</option>
+          <option value="low">Low (&lt; 0.3)</option>
+          <option value="none">No score data</option>
+        </select>
+        <select class="filter-select" id="ctx-freshness-filter">
+          <option value="">All freshness</option>
+          <option value="active">Active (hits in 30d)</option>
+          <option value="stale">Stale (no hits in 30d)</option>
+          <option value="never">Never searched</option>
+        </select>
         <select class="filter-select" id="ctx-sort">
-          <option value="time">Sort by time</option>
-          <option value="project">Sort by project</option>
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="score-desc">Score high &rarr; low</option>
+          <option value="score-asc">Score low &rarr; high</option>
+          <option value="alpha">Alphabetical</option>
+          <option value="project">By project</option>
         </select>
       </div>
 
+      <!-- Table -->
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Tags</th><th>Score</th><th>Updated</th><th></th></tr></thead>
+          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Score</th><th>Activity</th><th>Updated</th><th></th></tr></thead>
           <tbody id="ctx-tbody"></tbody>
         </table>
       </div>
+
+      <div class="pagination" id="ctx-pagination">
+        <button class="btn" id="ctx-prev" disabled>&larr; Prev</button>
+        <span class="pagination-info" id="ctx-page-info"></span>
+        <button class="btn" id="ctx-next" disabled>Next &rarr;</button>
+      </div>
+
       <div class="empty" id="ctx-empty" style="display:none;">
         <div class="empty-icon">&#x1F4ED;</div>
         <p>No contexts yet. Run <code style="color:var(--accent);">ctx-hive init</code> to auto-generate entries.</p>
@@ -442,9 +546,12 @@
   <div class="modal" id="modal">
     <h2 id="modal-title"></h2>
     <div class="modal-meta" id="modal-meta"></div>
+    <div class="quick-stats" id="modal-quick-stats"></div>
+    <div id="modal-sparkline-wrap" style="margin-bottom:16px;"></div>
     <div class="modal-body" id="modal-body"></div>
     <div id="modal-signals"></div>
     <div class="modal-actions">
+      <button class="btn-copy" id="modal-copy-id">Copy ID</button>
       <button class="btn btn-danger" id="modal-delete">Delete</button>
       <button class="btn" id="modal-close">Close</button>
     </div>
@@ -465,6 +572,9 @@ let currentPage = 'overview';
 let selectedContext = null;
 let jobsPage = 1;
 const jobsPageSize = 20;
+let ctxPage = 1;
+const ctxPageSize = 25;
+let ctxSearchTimer = null;
 
 // ── Navigation ────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -532,20 +642,17 @@ async function fetchJobs() {
 }
 
 async function fetchContexts() {
-  const scope = document.getElementById('ctx-scope-filter').value;
-  const project = document.getElementById('ctx-project-filter').value;
-  const sortBy = document.getElementById('ctx-sort').value;
-  const params = new URLSearchParams();
-  if (scope) params.set('scope', scope);
-  if (project) params.set('project', project);
-  if (sortBy) params.set('sortBy', sortBy);
   try {
     const [ctxRes, sigRes] = await Promise.all([
-      fetch('/api/contexts?' + params),
+      fetch('/api/contexts'),
       fetch('/api/signals'),
     ]);
     allContexts = await ctxRes.json();
     try { const sig = await sigRes.json(); allSignals = sig.entries || {}; } catch { allSignals = {}; }
+    populateTagFilter();
+    renderContextStats();
+    renderScoreDistribution();
+    renderScopeHealth();
     renderContexts();
   } catch {}
 }
@@ -749,6 +856,16 @@ function renderModalSignals(signals) {
 
   let evalsHtml = '';
   if (signals.evaluations && signals.evaluations.length > 0) {
+    // Summary counts
+    const counts = { '-1': 0, '0': 0, '1': 0, '2': 0 };
+    signals.evaluations.forEach(ev => { counts[String(ev.rating)] = (counts[String(ev.rating)] || 0) + 1; });
+    const summaryParts = [
+      counts['2'] > 0 ? '<span class="eval-summary-item"><span class="rating-dot" style="background:var(--green);width:8px;height:8px;display:inline-block;border-radius:50%;"></span> ' + counts['2'] + ' relied upon</span>' : '',
+      counts['1'] > 0 ? '<span class="eval-summary-item"><span class="rating-dot" style="background:var(--yellow);width:8px;height:8px;display:inline-block;border-radius:50%;"></span> ' + counts['1'] + ' referenced</span>' : '',
+      counts['0'] > 0 ? '<span class="eval-summary-item"><span class="rating-dot" style="background:var(--text3);width:8px;height:8px;display:inline-block;border-radius:50%;"></span> ' + counts['0'] + ' irrelevant</span>' : '',
+      counts['-1'] > 0 ? '<span class="eval-summary-item"><span class="rating-dot" style="background:var(--red);width:8px;height:8px;display:inline-block;border-radius:50%;"></span> ' + counts['-1'] + ' harmful</span>' : '',
+    ].filter(Boolean).join('');
+
     const items = signals.evaluations.slice().reverse().slice(0, 10).map(ev => {
       const dotColor = RATING_COLORS[String(ev.rating)] || 'var(--text3)';
       const label = RATING_LABELS[String(ev.rating)] || '?';
@@ -761,7 +878,9 @@ function renderModalSignals(signals) {
         '<span class="eval-meta">' + timeAgo(ev.evaluatedAt) + '</span>' +
         '</div>';
     }).join('');
-    evalsHtml = '<div style="margin-top:12px;"><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">EVALUATIONS</div><div class="eval-list">' + items + '</div></div>';
+    evalsHtml = '<div style="margin-top:12px;"><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">EVALUATIONS</div>' +
+      (summaryParts ? '<div class="eval-summary">' + summaryParts + '</div>' : '') +
+      '<div class="eval-list">' + items + '</div></div>';
   }
 
   el.innerHTML = '<div class="signal-section">' +
@@ -779,35 +898,305 @@ function renderModalSignals(signals) {
   '</div>';
 }
 
+// ── Context helpers ───────────────────────────────────────────────────
+
+function isCtxStale(entry, signals) {
+  const sig = signals || allSignals[entry.id];
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const updatedOld = new Date(entry.updated).getTime() < cutoff;
+  if (!sig) return updatedOld;
+  const recentHits = (sig.searchHits || [])
+    .filter(b => new Date(b.date).getTime() >= cutoff)
+    .reduce((sum, b) => sum + b.count, 0);
+  return recentHits === 0 && updatedOld;
+}
+
+function getCtxScoreTier(entry) {
+  const sig = allSignals[entry.id];
+  if (!sig) return 'none';
+  if (sig.score >= 0.6) return 'high';
+  if (sig.score >= 0.3) return 'mid';
+  return 'low';
+}
+
+function getCtxFreshness(entry) {
+  const sig = allSignals[entry.id];
+  if (!sig || !sig.searchHits || sig.searchHits.length === 0) return 'never';
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const recentHits = sig.searchHits
+    .filter(b => new Date(b.date).getTime() >= cutoff)
+    .reduce((sum, b) => sum + b.count, 0);
+  return recentHits > 0 ? 'active' : 'stale';
+}
+
+function populateTagFilter() {
+  const tagSet = new Set();
+  allContexts.forEach(c => (c.tags || []).forEach(t => tagSet.add(t)));
+  const sel = document.getElementById('ctx-tag-filter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All tags</option>';
+  [...tagSet].sort().forEach(t => {
+    const opt = document.createElement('option');
+    opt.value = t; opt.textContent = t;
+    sel.appendChild(opt);
+  });
+  sel.value = current;
+}
+
+function getFilteredContexts() {
+  const search = (document.getElementById('ctx-search').value || '').toLowerCase().trim();
+  const scope = document.getElementById('ctx-scope-filter').value;
+  const project = document.getElementById('ctx-project-filter').value;
+  const tag = document.getElementById('ctx-tag-filter').value;
+  const scoreTier = document.getElementById('ctx-score-filter').value;
+  const freshness = document.getElementById('ctx-freshness-filter').value;
+  const sortBy = document.getElementById('ctx-sort').value;
+
+  let filtered = allContexts;
+
+  if (search) {
+    filtered = filtered.filter(c => {
+      const title = (c.title || '').toLowerCase();
+      const tags = (c.tags || []).join(' ').toLowerCase();
+      const body = (c.body || '').toLowerCase();
+      return title.includes(search) || tags.includes(search) || body.includes(search);
+    });
+  }
+  if (scope) filtered = filtered.filter(c => c.scope === scope);
+  if (project) filtered = filtered.filter(c => c.project === project);
+  if (tag) filtered = filtered.filter(c => (c.tags || []).includes(tag));
+  if (scoreTier) filtered = filtered.filter(c => getCtxScoreTier(c) === scoreTier);
+  if (freshness) filtered = filtered.filter(c => getCtxFreshness(c) === freshness);
+
+  // Sort
+  filtered = [...filtered];
+  switch (sortBy) {
+    case 'newest': filtered.sort((a, b) => new Date(b.updated) - new Date(a.updated)); break;
+    case 'oldest': filtered.sort((a, b) => new Date(a.updated) - new Date(b.updated)); break;
+    case 'score-desc': filtered.sort((a, b) => ((allSignals[b.id]?.score ?? -1) - (allSignals[a.id]?.score ?? -1))); break;
+    case 'score-asc': filtered.sort((a, b) => ((allSignals[a.id]?.score ?? 2) - (allSignals[b.id]?.score ?? 2))); break;
+    case 'alpha': filtered.sort((a, b) => (a.title || '').localeCompare(b.title || '')); break;
+    case 'project': filtered.sort((a, b) => {
+      const p = (a.project || '').localeCompare(b.project || '');
+      return p !== 0 ? p : new Date(b.updated) - new Date(a.updated);
+    }); break;
+    default: filtered.sort((a, b) => new Date(b.updated) - new Date(a.updated));
+  }
+
+  return filtered;
+}
+
+function computeContextStats() {
+  let scored = 0, totalScore = 0, highCount = 0, lowCount = 0, unscoredCount = 0, staleCount = 0;
+  allContexts.forEach(c => {
+    const sig = allSignals[c.id];
+    if (!sig) { unscoredCount++; }
+    else {
+      scored++;
+      totalScore += sig.score;
+      if (sig.score >= 0.6) highCount++;
+      if (sig.score < 0.3) lowCount++;
+    }
+    if (isCtxStale(c)) staleCount++;
+  });
+  return {
+    total: allContexts.length,
+    avgScore: scored > 0 ? totalScore / scored : 0,
+    highCount, lowCount, unscoredCount, staleCount, scored
+  };
+}
+
+function renderContextStats() {
+  const el = document.getElementById('ctx-stats');
+  if (allContexts.length === 0) { el.innerHTML = ''; return; }
+  const s = computeContextStats();
+  const avgCls = s.avgScore < 0.3 ? 'red' : s.avgScore < 0.6 ? 'yellow' : 'green';
+  const needsPct = s.total > 0 ? Math.round(s.lowCount / s.total * 100) : 0;
+  el.innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total Contexts</div>
+      <div class="stat-value accent">${s.total}</div></div>
+    <div class="stat-card"><div class="stat-label">Avg Score</div>
+      <div class="stat-value ${avgCls}">${s.scored > 0 ? s.avgScore.toFixed(2) : '—'}</div></div>
+    <div class="stat-card"><div class="stat-label">Healthy</div>
+      <div class="stat-value green">${s.highCount}</div></div>
+    <div class="stat-card"><div class="stat-label">Needs Review</div>
+      <div class="stat-value ${s.lowCount > 0 ? 'red' : ''}">${s.lowCount}</div>
+      <div class="stat-sub">${needsPct}% of total</div></div>
+    <div class="stat-card"><div class="stat-label">Stale</div>
+      <div class="stat-value ${s.staleCount > 0 ? 'yellow' : ''}">${s.staleCount}</div></div>
+    <div class="stat-card"><div class="stat-label">Unscored</div>
+      <div class="stat-value">${s.unscoredCount}</div></div>
+  `;
+}
+
+function renderScoreDistribution() {
+  const el = document.getElementById('ctx-chart-scores');
+  if (allContexts.length === 0) { el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:20px;">No data</div>'; return; }
+  const buckets = Array(10).fill(0);
+  let noData = 0;
+  allContexts.forEach(c => {
+    const sig = allSignals[c.id];
+    if (!sig) { noData++; return; }
+    const idx = Math.min(Math.floor(sig.score * 10), 9);
+    buckets[idx]++;
+  });
+  const items = buckets.map((count, i) => {
+    const color = i < 3 ? 'var(--red)' : i < 6 ? 'var(--yellow)' : 'var(--green)';
+    return { label: (i / 10).toFixed(1), value: count, color };
+  });
+  if (noData > 0) items.push({ label: 'N/A', value: noData, color: 'var(--text3)' });
+  renderBarChart('ctx-chart-scores', items);
+}
+
+function renderScopeHealth() {
+  const el = document.getElementById('ctx-chart-scope-health');
+  if (allContexts.length === 0) { el.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:20px;">No data</div>'; return; }
+  const scopes = ['project', 'org', 'personal'];
+  const data = {};
+  scopes.forEach(s => { data[s] = { high: 0, mid: 0, low: 0, none: 0, total: 0 }; });
+  allContexts.forEach(c => {
+    const d = data[c.scope];
+    if (!d) return;
+    d.total++;
+    const tier = getCtxScoreTier(c);
+    d[tier]++;
+  });
+  el.innerHTML = scopes.map(s => {
+    const d = data[s];
+    if (d.total === 0) return '';
+    const pct = (v) => d.total > 0 ? (v / d.total * 100) : 0;
+    return `<div class="scope-health-row">
+      <span class="scope-health-label">${s}</span>
+      <div class="scope-health-bar"><div class="stacked-bar">
+        <div class="stacked-segment" style="width:${pct(d.high)}%;background:var(--green);" title="${d.high} high"></div>
+        <div class="stacked-segment" style="width:${pct(d.mid)}%;background:var(--yellow);" title="${d.mid} mid"></div>
+        <div class="stacked-segment" style="width:${pct(d.low)}%;background:var(--red);" title="${d.low} low"></div>
+        <div class="stacked-segment" style="width:${pct(d.none)}%;background:var(--text3);opacity:0.3;" title="${d.none} unscored"></div>
+      </div></div>
+      <span class="scope-health-count">${d.total}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderMiniSparkline(searchHits, days) {
+  if (!searchHits || searchHits.length === 0) return '<span class="text-dim" style="font-size:11px;">inactive</span>';
+  const now = new Date();
+  const buckets = Array(days).fill(0);
+  searchHits.forEach(h => {
+    const d = new Date(h.date);
+    const daysAgo = Math.floor((now - d) / (24 * 60 * 60 * 1000));
+    if (daysAgo >= 0 && daysAgo < days) buckets[days - 1 - daysAgo] += h.count;
+  });
+  const hasActivity = buckets.some(v => v > 0);
+  if (!hasActivity) return '<span class="text-dim" style="font-size:11px;">inactive</span>';
+  const max = Math.max(...buckets, 1);
+  return '<div class="sparkline-mini">' + buckets.map(v =>
+    '<div class="spark-bar" style="height:' + (v > 0 ? Math.max(2, (v / max) * 18) : 0) + 'px"></div>'
+  ).join('') + '</div>';
+}
+
+function renderWideSparkline(searchHits, days) {
+  const now = new Date();
+  const buckets = Array(days).fill(0);
+  (searchHits || []).forEach(h => {
+    const d = new Date(h.date);
+    const daysAgo = Math.floor((now - d) / (24 * 60 * 60 * 1000));
+    if (daysAgo >= 0 && daysAgo < days) buckets[days - 1 - daysAgo] += h.count;
+  });
+  const max = Math.max(...buckets, 1);
+  const hasActivity = buckets.some(v => v > 0);
+  if (!hasActivity) return '<div style="color:var(--text3);font-size:12px;">No search activity in last ' + days + ' days</div>';
+  return '<div style="font-size:11px;color:var(--text3);margin-bottom:4px;">SEARCH ACTIVITY (last ' + days + ' days)</div>' +
+    '<div class="sparkline-wide">' + buckets.map(v =>
+      '<div class="spark-bar" style="height:' + (v > 0 ? Math.max(2, (v / max) * 36) : 0) + 'px"></div>'
+    ).join('') + '</div>';
+}
+
 // ── Render: Contexts ──────────────────────────────────────────────────
 function renderContexts() {
   const tbody = document.getElementById('ctx-tbody');
   const empty = document.getElementById('ctx-empty');
+  const chartsRow = document.getElementById('ctx-charts-row');
+  const paginationEl = document.getElementById('ctx-pagination');
 
   if (allContexts.length === 0) {
     tbody.innerHTML = '';
     empty.style.display = 'block';
+    chartsRow.style.display = 'none';
+    paginationEl.style.display = 'none';
     return;
   }
   empty.style.display = 'none';
+  chartsRow.style.display = '';
 
-  tbody.innerHTML = allContexts.map(c => `
-    <tr style="cursor:pointer;" onclick="openContext('${esc(c.id)}')">
-      <td style="font-weight:500;">${esc(c.title)}</td>
-      <td><span class="scope-badge scope-${c.scope}">${c.scope}</span></td>
-      <td class="mono">${esc(c.project || '—')}</td>
-      <td>${(c.tags || []).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}</td>
-      <td>${renderScoreBadge(allSignals[c.id])}</td>
-      <td class="mono text-dim">${timeAgo(c.updated)}</td>
-      <td><button class="btn-delete" onclick="event.stopPropagation();deleteContext('${esc(c.id)}')">delete</button></td>
-    </tr>
-  `).join('');
+  const filtered = getFilteredContexts();
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:32px;">No contexts match filters</td></tr>';
+    paginationEl.style.display = 'none';
+    return;
+  }
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ctxPageSize));
+  if (ctxPage > totalPages) ctxPage = totalPages;
+  const start = (ctxPage - 1) * ctxPageSize;
+  const end = start + ctxPageSize;
+  const page = filtered.slice(start, end);
+
+  tbody.innerHTML = page.map(c => {
+    const sig = allSignals[c.id];
+    const stale = isCtxStale(c);
+    const tier = getCtxScoreTier(c);
+    const rowCls = tier === 'low' ? 'ctx-row-low' : stale ? 'ctx-row-stale' : '';
+    const preview = (c.body || '').slice(0, 80).replace(/\n/g, ' ');
+    const tags = (c.tags || []).map(t => '<span class="tag">' + esc(t) + '</span>').join('');
+
+    // Score with inline bar
+    let scoreHtml;
+    if (sig) {
+      const s = sig.score;
+      const cls = s < 0.3 ? 'score-low' : s < 0.6 ? 'score-mid' : 'score-high';
+      const barColor = s < 0.3 ? 'var(--red)' : s < 0.6 ? 'var(--yellow)' : 'var(--green)';
+      const hits = (sig.searchHits || []).reduce((sum, b) => sum + b.count, 0);
+      const evals = (sig.evaluations || []).length;
+      scoreHtml = '<span class="score-badge ' + cls + '" title="' + hits + ' hits / ' + evals + ' evals">' + s.toFixed(2) + '</span>' +
+        '<div class="score-bar-inline"><div class="score-bar-inline-fill" style="width:' + (s * 100) + '%;background:' + barColor + ';"></div></div>';
+    } else {
+      scoreHtml = '<span class="text-dim">\u2014</span>';
+    }
+
+    return '<tr class="' + rowCls + '" style="cursor:pointer;" onclick="openContext(\'' + esc(c.id) + '\')">' +
+      '<td class="ctx-title-cell"><span class="ctx-title-text">' + esc(c.title) + '</span>' +
+        (preview ? '<div class="body-preview">' + esc(preview) + '</div>' : '') +
+        (tags ? '<div class="ctx-tags-inline">' + tags + '</div>' : '') +
+      '</td>' +
+      '<td><span class="scope-badge scope-' + c.scope + '">' + c.scope + '</span></td>' +
+      '<td class="mono">' + esc(c.project || '\u2014') + '</td>' +
+      '<td>' + scoreHtml + '</td>' +
+      '<td>' + renderMiniSparkline(sig ? sig.searchHits : null, 30) + '</td>' +
+      '<td class="mono text-dim has-tooltip" data-tooltip="' + esc(new Date(c.updated).toLocaleString()) + '">' + timeAgo(c.updated) + '</td>' +
+      '<td><button class="btn-delete" onclick="event.stopPropagation();deleteContext(\'' + esc(c.id) + '\')">delete</button></td>' +
+    '</tr>';
+  }).join('');
+
+  // Pagination controls
+  if (filtered.length > ctxPageSize) {
+    paginationEl.style.display = '';
+    document.getElementById('ctx-prev').disabled = ctxPage <= 1;
+    document.getElementById('ctx-next').disabled = ctxPage >= totalPages;
+    document.getElementById('ctx-page-info').textContent = (start + 1) + '\u2013' + Math.min(end, filtered.length) + ' of ' + filtered.length;
+  } else {
+    paginationEl.style.display = 'none';
+  }
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────
 function openContext(id) {
   selectedContext = allContexts.find(c => c.id === id);
   if (!selectedContext) return;
+  const sig = allSignals[selectedContext.id] || null;
+
   document.getElementById('modal-title').textContent = selectedContext.title;
   document.getElementById('modal-meta').innerHTML = `
     <span class="scope-badge scope-${selectedContext.scope}">${selectedContext.scope}</span>
@@ -816,9 +1205,34 @@ function openContext(id) {
     <span class="mono text-dim">${new Date(selectedContext.updated).toLocaleString()}</span>
     ${(selectedContext.tags||[]).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}
   `;
+
+  // Quick stats
+  const cutoff30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const totalHits = sig ? (sig.searchHits || []).reduce((s, b) => s + b.count, 0) : 0;
+  const recentHits = sig ? (sig.searchHits || []).filter(b => new Date(b.date).getTime() >= cutoff30).reduce((s, b) => s + b.count, 0) : 0;
+  const evalCount = sig ? (sig.evaluations || []).length : 0;
+  const daysSinceUpdate = Math.floor((Date.now() - new Date(selectedContext.updated).getTime()) / (24 * 60 * 60 * 1000));
+  const scoreVal = sig ? sig.score : null;
+  const scoreColor = scoreVal !== null ? scoreBarColor(scoreVal) : 'var(--text3)';
+
+  document.getElementById('modal-quick-stats').innerHTML = `
+    <div class="quick-stat"><div class="quick-stat-value" style="color:${scoreColor}">${scoreVal !== null ? scoreVal.toFixed(2) : '\u2014'}</div><div class="quick-stat-label">Score</div></div>
+    <div class="quick-stat"><div class="quick-stat-value">${totalHits}</div><div class="quick-stat-label">Total hits</div></div>
+    <div class="quick-stat"><div class="quick-stat-value">${recentHits}</div><div class="quick-stat-label">Hits (30d)</div></div>
+    <div class="quick-stat"><div class="quick-stat-value">${evalCount}</div><div class="quick-stat-label">Evaluations</div></div>
+    <div class="quick-stat"><div class="quick-stat-value">${daysSinceUpdate}d</div><div class="quick-stat-label">Since update</div></div>
+  `;
+
+  // 90-day sparkline
+  document.getElementById('modal-sparkline-wrap').innerHTML = renderWideSparkline(sig ? sig.searchHits : [], 90);
+
   document.getElementById('modal-body').textContent = selectedContext.body || '(empty)';
-  renderModalSignals(allSignals[selectedContext.id] || null);
+  renderModalSignals(sig);
   document.getElementById('modal-overlay').classList.add('open');
+}
+
+function copyToClipboard(text) {
+  navigator.clipboard.writeText(text).catch(() => {});
 }
 
 function closeModal() {
@@ -1104,9 +1518,24 @@ function timeAgo(iso) {
 );
 document.getElementById('jobs-prev').addEventListener('click', () => { jobsPage--; renderJobs(); });
 document.getElementById('jobs-next').addEventListener('click', () => { jobsPage++; renderJobs(); });
-['ctx-scope-filter', 'ctx-project-filter', 'ctx-sort'].forEach(id =>
-  document.getElementById(id).addEventListener('change', fetchContexts)
+// Context filter listeners (client-side filtering, no re-fetch)
+['ctx-scope-filter', 'ctx-project-filter', 'ctx-tag-filter', 'ctx-score-filter', 'ctx-freshness-filter', 'ctx-sort'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => { ctxPage = 1; renderContexts(); })
 );
+document.getElementById('ctx-search').addEventListener('input', () => {
+  clearTimeout(ctxSearchTimer);
+  ctxSearchTimer = setTimeout(() => { ctxPage = 1; renderContexts(); }, 200);
+});
+document.getElementById('ctx-prev').addEventListener('click', () => { ctxPage--; renderContexts(); });
+document.getElementById('ctx-next').addEventListener('click', () => { ctxPage++; renderContexts(); });
+
+// Copy ID button
+document.getElementById('modal-copy-id').addEventListener('click', () => {
+  if (selectedContext) copyToClipboard(selectedContext.id);
+  const btn = document.getElementById('modal-copy-id');
+  btn.textContent = 'Copied!';
+  setTimeout(() => { btn.textContent = 'Copy ID'; }, 1500);
+});
 document.getElementById('repo-filter').addEventListener('change', renderRepos);
 
 // ── Live elapsed timer for processing jobs ───────────────────────────

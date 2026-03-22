@@ -11,6 +11,7 @@ import {
   hiveRoot,
   parseFrontmatter,
   type IndexEntry,
+  isScope,
   SCOPES,
 } from "../ctx/store.ts";
 import {
@@ -29,6 +30,8 @@ import {
   updateLastScanned,
 } from "../repo/tracking.ts";
 import { loadSignals } from "../ctx/signals.ts";
+import { search, type SearchFilters } from "../ctx/search.ts";
+import { loadSearchHistory, getSearchStats } from "../ctx/search-history.ts";
 import {
   discoverRepos,
   enrichTrackedRepos,
@@ -298,6 +301,37 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // GET /api/signals
   if (path === "/api/signals" && req.method === "GET") {
     return json(await loadSignals());
+  }
+
+  // ── Search endpoints ──────────────────────────────────────────────────
+
+  // GET /api/search?q=...&scope=...&project=...&tags=...&limit=...
+  if (path === "/api/search" && req.method === "GET") {
+    const q = url.searchParams.get("q") ?? "";
+    if (q === "") return json({ error: "q parameter required" }, 400);
+    const scope = url.searchParams.get("scope") ?? undefined;
+    const project = url.searchParams.get("project") ?? undefined;
+    const tagsParam = url.searchParams.get("tags");
+    const tags = tagsParam !== null && tagsParam !== "" ? tagsParam.split(",").filter(Boolean) : undefined;
+    const limit = parseInt(url.searchParams.get("limit") ?? "5", 10);
+    const validScope = scope !== undefined && isScope(scope) ? scope : undefined;
+    const filters: SearchFilters = { scope: validScope, tags, project };
+    const results = await search(q, filters, limit, { source: "api" });
+    return json({ query: q, results });
+  }
+
+  // GET /api/search-history?since=<ISO>&limit=<n>
+  if (path === "/api/search-history" && req.method === "GET") {
+    const sinceParam = url.searchParams.get("since");
+    const limitParam = url.searchParams.get("limit");
+    const since = sinceParam !== null && sinceParam !== "" ? new Date(sinceParam) : undefined;
+    const limit = limitParam !== null && limitParam !== "" ? parseInt(limitParam, 10) : undefined;
+    return json(await loadSearchHistory({ since, limit }));
+  }
+
+  // GET /api/search-stats
+  if (path === "/api/search-stats" && req.method === "GET") {
+    return json(await getSearchStats());
   }
 
   // ── Repo endpoints ───────────────────────────────────────────────────

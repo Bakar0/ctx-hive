@@ -2,21 +2,35 @@ import { z } from "zod";
 import { ensureJobDirs } from "../daemon/jobs.ts";
 import { CLAUDE_SETTINGS_PATH } from "../adapter/claude-paths.ts";
 
-const HookCommandSchema = z.object({ command: z.string().optional() });
-const HookEntrySchema = z.object({ hooks: z.array(HookCommandSchema).optional() });
+const HookCommandSchema = z.object({ type: z.string().optional(), command: z.string().optional() });
+const HookEntrySchema = z.object({ matcher: z.string().optional(), hooks: z.array(HookCommandSchema).optional() });
 const SettingsSchema = z.object({
   hooks: z.record(z.string(), z.array(HookEntrySchema)).optional(),
 }).passthrough();
 
-const HOOK_ENTRY = {
-  matcher: "",
-  hooks: [
-    {
-      type: "command",
-      command: "ctx-hive enqueue session-mine",
-    },
-  ],
-};
+interface HookDef {
+  event: string;
+  command: string;
+  label: string;
+}
+
+const HOOKS: HookDef[] = [
+  {
+    event: "SessionEnd",
+    command: "ctx-hive enqueue session-mine",
+    label: "SessionEnd (session mining)",
+  },
+  {
+    event: "UserPromptSubmit",
+    command: "ctx-hive inject",
+    label: "UserPromptSubmit (context injection)",
+  },
+];
+
+/** Check if a hook entry belongs to ctx-hive (command starts with "ctx-hive") */
+function isCtxHiveHook(entry: z.infer<typeof HookEntrySchema>): boolean {
+  return entry.hooks?.some((h) => h.command?.startsWith("ctx-hive") === true) === true;
+}
 
 export async function installHook(): Promise<void> {
   // 1. Ensure job directories exist
@@ -36,30 +50,28 @@ export async function installHook(): Promise<void> {
     }
   }
 
-  // 3. Merge hook into settings
+  // 3. Remove existing ctx-hive hooks, then add current definitions
   const hooks = settings.hooks ?? {};
-  const sessionEndHooks = hooks.SessionEnd ?? [];
 
-  // Check if already installed
-  const alreadyInstalled = sessionEndHooks.some((entry) =>
-    entry.hooks?.some((h) => h.command === "ctx-hive enqueue session-mine") === true,
-  );
+  for (const def of HOOKS) {
+    // Remove any existing ctx-hive hooks for this event
+    const existing = hooks[def.event] ?? [];
+    const filtered = existing.filter((entry) => !isCtxHiveHook(entry));
 
-  if (alreadyInstalled) {
-    console.log("SessionEnd hook is already installed.");
-    return;
+    // Add current definition
+    filtered.push({
+      matcher: "",
+      hooks: [{ type: "command", command: def.command }],
+    });
+    hooks[def.event] = filtered;
+    console.log(`${def.label} hook installed.`);
   }
 
-  sessionEndHooks.push(HOOK_ENTRY);
-  hooks.SessionEnd = sessionEndHooks;
   settings.hooks = hooks;
 
   // 4. Write back
   await Bun.write(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2));
 
-  console.log("SessionEnd hook installed successfully.");
-  console.log(`  Settings: ${CLAUDE_SETTINGS_PATH}`);
-  console.log(`  Command:  ctx-hive enqueue session-mine`);
-  console.log("");
+  console.log(`\nSettings: ${CLAUDE_SETTINGS_PATH}`);
   console.log("Start the daemon with: ctx-hive serve");
 }

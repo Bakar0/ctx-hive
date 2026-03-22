@@ -131,7 +131,7 @@ async function loadJobsFromDir(
           createdAt: data.createdAt ?? "",
           sessionId: data.sessionId,
           cwd: data.cwd,
-          project: projectFromCwd(data.cwd),
+          project: projectFromCwd(data.cwd ?? data.repoPath),
           reason: data.reason,
           error: data._error,
           failedAt: data._failedAt,

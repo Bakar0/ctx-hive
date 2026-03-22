@@ -28,6 +28,7 @@ import {
   untrackRepo,
   updateLastScanned,
 } from "../repo/tracking.ts";
+import { loadSignals } from "../ctx/signals.ts";
 import {
   discoverRepos,
   enrichTrackedRepos,
@@ -292,6 +293,11 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const index = await loadIndex();
     const projects = [...new Set(index.map((e) => e.project).filter(Boolean))].sort();
     return json(projects);
+  }
+
+  // GET /api/signals
+  if (path === "/api/signals" && req.method === "GET") {
+    return json(await loadSignals());
   }
 
   // ── Repo endpoints ───────────────────────────────────────────────────

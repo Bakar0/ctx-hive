@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { resolveRepoMeta, buildSessionPrompt, buildGitChangePrompt, buildRepoPrompt, gatherRepoContext, type GitChangeDetails } from "../ctx/init.ts";
+import { resolveRepoMeta, buildSessionPrompt, buildGitChangePrompt, buildRepoPrompt, gatherRepoContext, type GitChangeDetails, type ServedEntry } from "../ctx/init.ts";
 import { loadIndex, hiveRoot, type IndexEntry } from "../ctx/store.ts";
+import { extractServedEntries } from "../ctx/sessions.ts";
 import { runSingle } from "../adapter/pipeline.ts";
 import { runGit } from "../git/run.ts";
 import type { Job, JobResult } from "./jobs.ts";
@@ -99,7 +100,17 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
     (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
   );
   const isUpdate = existing.length > 0;
-  const prompt = buildSessionPrompt(meta, [transcriptPath], existing, isUpdate);
+
+  // Find entry IDs that were served in this session's search results
+  const servedIds = await extractServedEntries(transcriptPath);
+  const servedEntries: ServedEntry[] = servedIds
+    .map((id) => {
+      const entry = index.find((e) => e.id === id);
+      return entry !== undefined ? { id, title: entry.title } : null;
+    })
+    .filter((e): e is ServedEntry => e !== null);
+
+  const prompt = buildSessionPrompt(meta, [transcriptPath], existing, isUpdate, servedEntries);
 
   return runAgentAndCollect(
     `daemon-session-mine-${meta.name}`,

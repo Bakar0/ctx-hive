@@ -319,6 +319,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       if (!result.success) return json({ error: "absPath required" }, 400);
       const tracked = await trackRepo(result.data.absPath);
       broadcastRepoEvent("repo:tracked", tracked);
+      await enqueueRepoSync(result.data.absPath);
       return json(tracked);
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);

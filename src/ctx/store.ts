@@ -2,6 +2,7 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { z } from "zod";
+import { countTokens } from "@anthropic-ai/tokenizer";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export interface EntryMeta {
   project: string;
   created: string;
   updated: string;
+  tokens: number;
 }
 
 export interface IndexEntry extends EntryMeta {
@@ -41,6 +43,7 @@ const IndexEntrySchema = z.array(z.object({
   project: z.string(),
   created: z.string(),
   updated: z.string(),
+  tokens: z.number().optional().default(0),
   path: z.string(),
 }));
 
@@ -123,6 +126,7 @@ export function parseFrontmatter(raw: string): { meta: EntryMeta; body: string }
     typeof meta[key] === "string" ? meta[key] : "";
   const scopeVal = str("scope");
 
+  const tokensVal = str("tokens");
   return {
     meta: {
       id: str("id"),
@@ -132,6 +136,7 @@ export function parseFrontmatter(raw: string): { meta: EntryMeta; body: string }
       project: str("project"),
       created: str("created"),
       updated: str("updated"),
+      tokens: tokensVal !== "" ? parseInt(tokensVal, 10) : 0,
     },
     body,
   };
@@ -147,6 +152,7 @@ tags: ${tags}
 project: "${meta.project}"
 created: "${meta.created}"
 updated: "${meta.updated}"
+tokens: ${meta.tokens}
 ---
 
 ${body}
@@ -167,7 +173,9 @@ export async function writeEntry(meta: EntryMeta, body: string): Promise<string>
   await ensureCtxDir();
   const slug = slugify(meta.title);
   const filePath = entryPath(meta.scope, slug);
-  await Bun.write(filePath, serializeEntry(meta, body));
+  const serialized = serializeEntry({ ...meta, tokens: 0 }, body);
+  const tokens = countTokens(serialized);
+  await Bun.write(filePath, serializeEntry({ ...meta, tokens }, body));
   await rebuildIndex();
   return slug;
 }
@@ -214,8 +222,10 @@ export async function rebuildIndex(): Promise<IndexEntry[]> {
       try {
         const raw = await Bun.file(join(scopeDir, file)).text();
         const { meta } = parseFrontmatter(raw);
+        const tokens = countTokens(raw);
         entries.push({
           ...meta,
+          tokens,
           path: relativeEntryPath(scope, slug),
         });
       } catch {

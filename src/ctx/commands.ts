@@ -135,6 +135,7 @@ async function ctxAdd(args: string[]): Promise<void> {
     project,
     created: now,
     updated: now,
+    tokens: 0,
   };
 
   const slug = await writeEntry(meta, body);
@@ -193,7 +194,8 @@ async function ctxList(args: string[]): Promise<void> {
 
   for (const e of entries) {
     const tags = e.tags.length > 0 ? ` [${e.tags.join(", ")}]` : "";
-    console.log(`${e.id}  ${e.scope.padEnd(8)}  ${e.title}${tags}`);
+    const tok = e.tokens > 0 ? `  ${e.tokens} tok` : "";
+    console.log(`${e.id}  ${e.scope.padEnd(8)}  ${e.title}${tags}${tok}`);
   }
 }
 
@@ -212,7 +214,8 @@ async function ctxShow(args: string[]): Promise<void> {
 
   const entry = await readEntry(resolved.scope, resolved.slug);
   const tags = entry.tags.length > 0 ? `\nTags: ${entry.tags.join(", ")}` : "";
-  console.log(`# ${entry.title}\nScope: ${entry.scope}  ID: ${entry.id}${tags}\n\n${entry.body}`);
+  const tok = entry.tokens > 0 ? `  Tokens: ${entry.tokens}` : "";
+  console.log(`# ${entry.title}\nScope: ${entry.scope}  ID: ${entry.id}${tok}${tags}\n\n${entry.body}`);
 }
 
 async function ctxEdit(args: string[]): Promise<void> {

@@ -37,7 +37,7 @@ function formatInjectResult(results: SearchResult[]): string {
 
   const entries = results.map((r) => {
     const tags = r.tags.length > 0 ? `\nTags: ${r.tags.join(", ")}` : "";
-    return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score} | **source:** inject${tags}\n\n${r.excerpt}`;
+    return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score} | **tokens:** ${r.tokens} | **source:** inject${tags}\n\n${r.excerpt}`;
   });
 
   return [
@@ -78,6 +78,7 @@ async function tryDaemonSearch(
         project: z.string(),
         created: z.string(),
         updated: z.string(),
+        tokens: z.number().optional().default(0),
         path: z.string(),
         score: z.number(),
         excerpt: z.string(),

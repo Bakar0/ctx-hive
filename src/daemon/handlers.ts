@@ -12,6 +12,40 @@ const AGENT_MODEL = "sonnet";
 const AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
 const LOGS_DIR = join(hiveRoot(), "logs");
 
+// ── Transcript parsing ──────────────────────────────────────────────
+
+/**
+ * Extract the context window size from a Claude Code session transcript.
+ * Reads the last assistant message's usage and sums input + cached tokens.
+ */
+export async function extractTranscriptTokens(transcriptPath: string): Promise<number | undefined> {
+  try {
+    const text = await Bun.file(transcriptPath).text();
+    const lines = text.trim().split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const msg: unknown = JSON.parse(lines[i]!);
+        if (
+          typeof msg !== "object" || msg === null ||
+          !("type" in msg) || msg.type !== "assistant" ||
+          !("message" in msg) || typeof msg.message !== "object" || msg.message === null ||
+          !("usage" in msg.message) || typeof msg.message.usage !== "object" || msg.message.usage === null
+        ) continue;
+        const u = msg.message.usage;
+        const inp = "input_tokens" in u && typeof u.input_tokens === "number" ? u.input_tokens : 0;
+        const cacheCreate = "cache_creation_input_tokens" in u && typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : 0;
+        const cacheRead = "cache_read_input_tokens" in u && typeof u.cache_read_input_tokens === "number" ? u.cache_read_input_tokens : 0;
+        return inp + cacheCreate + cacheRead;
+      } catch {
+        // skip malformed lines
+      }
+    }
+  } catch {
+    // skip if unreadable
+  }
+  return undefined;
+}
+
 // ── Handler type ──────────────────────────────────────────────────────
 
 export type JobHandler = (job: Job) => Promise<JobResult>;
@@ -85,14 +119,8 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
   if (job.type !== "session-mine") throw new Error("Expected session-mine job");
   const { cwd, transcriptPath } = job;
 
-  // Estimate transcript token count from file size
-  let transcriptTokens: number | undefined;
-  try {
-    const file = Bun.file(transcriptPath);
-    transcriptTokens = Math.round(file.size / 4);
-  } catch {
-    // skip if unreadable
-  }
+  // Extract context window size from the last assistant message's usage
+  const transcriptTokens = await extractTranscriptTokens(transcriptPath);
 
   const meta = await resolveRepoMeta(cwd);
   const index = await loadIndex();

@@ -198,7 +198,7 @@ export function formatHuman(results: SearchResult[]): string {
       const tags = r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
       return [
         `${i + 1}. ${r.title}${tags}`,
-        `   id: ${r.id}  scope: ${r.scope}  relevance: ${r.score}`,
+        `   id: ${r.id}  scope: ${r.scope}  relevance: ${r.score}  tokens: ${r.tokens}`,
         `   ${r.excerpt}`,
       ].join("\n");
     })
@@ -215,7 +215,7 @@ export function formatMarkdown(results: SearchResult[]): string {
   return results
     .map((r) => {
       const tags = r.tags.length > 0 ? `  \nTags: ${r.tags.join(", ")}` : "";
-      return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score}${tags}\n\n${r.excerpt}`;
+      return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score} | **tokens:** ${r.tokens}${tags}\n\n${r.excerpt}`;
     })
     .join("\n\n---\n\n");
 }

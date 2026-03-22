@@ -106,6 +106,50 @@
   .badge-done { background: rgba(63,185,80,0.15); color: var(--green); }
   .badge-failed { background: rgba(248,81,73,0.15); color: var(--red); }
 
+  /* ── Job expandable rows ─────────────────────────────────────── */
+  .job-row { cursor: pointer; }
+  .job-row:hover td { background: rgba(88,166,255,0.06); }
+  .job-row.expanded td { background: rgba(88,166,255,0.04); border-bottom-color: transparent; }
+  .job-chevron-cell { width: 32px; text-align: center; }
+  .job-chevron { display: inline-block; color: var(--text3);
+    transition: transform 0.2s ease; font-size: 12px; }
+  .job-chevron.open { transform: rotate(90deg); color: var(--accent); }
+  .job-detail-row td { padding: 0 !important; border-bottom: 1px solid var(--border); }
+  .job-detail-row:hover td { background: transparent; }
+  .job-detail-cell { overflow: hidden; }
+  .job-detail { padding: 16px 20px 20px 48px; background: var(--bg);
+    border-top: 1px solid var(--border); }
+  .job-detail-grid { display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 12px; margin-bottom: 16px; }
+  .job-detail-stat { display: flex; flex-direction: column; gap: 2px; }
+  .job-detail-stat-label { font-size: 10px; color: var(--text3);
+    text-transform: uppercase; letter-spacing: 0.5px; }
+  .job-detail-stat-value { font-size: 16px; font-weight: 600; font-family: var(--font); }
+  .job-error-box { background: rgba(248,81,73,0.08);
+    border: 1px solid rgba(248,81,73,0.25); border-radius: 6px;
+    padding: 12px 14px; margin-top: 12px; }
+  .job-error-label { font-size: 10px; color: var(--red);
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .job-error-text { font-size: 12px; color: var(--red);
+    font-family: var(--font); word-break: break-word;
+    white-space: pre-wrap; line-height: 1.5; }
+  .token-bar-wrap { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .token-bar { flex: 1; height: 8px; background: var(--bg3);
+    border-radius: 4px; overflow: hidden; display: flex; }
+  .token-bar-input { height: 100%; background: var(--accent); border-radius: 4px 0 0 4px; }
+  .token-bar-output { height: 100%; background: var(--purple); }
+  .job-session-row { display: flex; align-items: center; gap: 8px;
+    font-family: var(--font); font-size: 12px; color: var(--text2);
+    margin-top: 12px; padding: 8px 12px;
+    background: var(--bg2); border-radius: 6px; }
+  .job-session-row code { color: var(--accent); }
+  .job-path { font-size: 11px; font-family: var(--font);
+    color: var(--text3); word-break: break-all; }
+  .job-timestamps { display: flex; gap: 16px; flex-wrap: wrap;
+    margin-top: 12px; font-size: 11px; color: var(--text3); }
+  .job-timestamps span { font-family: var(--font); }
+
   .scope-badge { display: inline-block; padding: 2px 8px; border-radius: 12px;
     font-size: 11px; font-family: var(--font); }
   .scope-project { background: rgba(88,166,255,0.15); color: var(--accent); }
@@ -403,7 +447,7 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Status</th><th>Type</th><th>Project</th><th>Transcript</th><th>Duration</th><th>Stats</th><th>Created</th></tr></thead>
+          <thead><tr><th style="width:32px;"></th><th>Status</th><th>Type</th><th>Project</th><th>Created</th></tr></thead>
           <tbody id="jobs-tbody"></tbody>
         </table>
       </div>
@@ -478,7 +522,7 @@
       <!-- Table -->
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Score</th><th>Activity</th><th>Updated</th><th></th></tr></thead>
+          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Tokens</th><th>Score</th><th>Activity</th><th>Updated</th><th></th></tr></thead>
           <tbody id="ctx-tbody"></tbody>
         </table>
       </div>
@@ -624,6 +668,7 @@
 let ws = null;
 let metrics = null;
 let allJobs = [];
+let expandedJobIndex = null;
 let allContexts = [];
 let allSignals = {};
 let allRepos = [];
@@ -810,6 +855,7 @@ function renderOverview() {
 
 // ── Render: Jobs ──────────────────────────────────────────────────────
 function renderJobs() {
+  expandedJobIndex = null;
   const statusF = document.getElementById('job-status-filter').value;
   const projectF = document.getElementById('job-project-filter').value;
   let filtered = allJobs;
@@ -824,19 +870,35 @@ function renderJobs() {
   const page = filtered.slice(start, end);
 
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
   } else {
-    tbody.innerHTML = page.map(j => `
-      <tr>
-        <td><span class="badge badge-${j.status}">${j.status}</span></td>
-        <td>${esc(j.type || '—')}</td>
-        <td>${esc(j.project || '—')}</td>
-        <td class="mono text-dim">${j.transcriptTokens != null ? '~' + formatCompact(j.transcriptTokens) + ' tokens' : '—'}</td>
-        <td class="mono">${renderDuration(j)}</td>
-        <td>${renderStats(j)}</td>
-        <td class="mono text-dim">${timeAgo(j.createdAt)}</td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = page.map((j, i) => {
+      const idx = start + i;
+      // Status cell: badge + optional processing timer
+      let statusHtml = '<span class="badge badge-' + j.status + '">' + j.status + '</span>';
+      if (j.status === 'processing' && j.startedAt) {
+        statusHtml += '<div style="font-size:10px;margin-top:3px;" class="mono pulse text-dim" data-started="' + esc(j.startedAt) + '">' + formatDuration(Date.now() - new Date(j.startedAt).getTime()) + '</div>';
+      }
+      // Inline hint next to type
+      let typeExtra = '';
+      if (j.status === 'done' && j.entriesCreated != null && j.entriesCreated > 0) {
+        typeExtra = ' <span style="color:var(--green);font-size:11px;">+' + j.entriesCreated + '</span>';
+      }
+      if (j.status === 'failed') {
+        typeExtra = ' <span style="color:var(--red);font-size:11px;">&#x26A0;</span>';
+      }
+
+      return '<tr class="job-row" onclick="toggleJobDetail(' + idx + ')">' +
+        '<td class="job-chevron-cell"><span class="job-chevron" id="job-chevron-' + idx + '">&#x25B8;</span></td>' +
+        '<td>' + statusHtml + '</td>' +
+        '<td class="mono">' + esc(j.type || '\u2014') + typeExtra + '</td>' +
+        '<td>' + esc(j.project || '\u2014') + '</td>' +
+        '<td class="mono text-dim" title="' + esc(new Date(j.createdAt).toLocaleString()) + '">' + timeAgo(j.createdAt) + '</td>' +
+      '</tr>' +
+      '<tr class="job-detail-row" id="job-detail-' + idx + '" style="display:none;">' +
+        '<td colspan="5" class="job-detail-cell"><div class="job-detail">' + renderJobDetail(j) + '</div></td>' +
+      '</tr>';
+    }).join('');
   }
 
   // Update pagination controls
@@ -847,29 +909,140 @@ function renderJobs() {
     : (start + 1) + '–' + Math.min(end, filtered.length) + ' of ' + filtered.length;
 }
 
-function renderDuration(j) {
-  if (j.status === 'processing' && j.startedAt) {
-    return '<span class="pulse" data-started="' + esc(j.startedAt) + '">' + formatDuration(Date.now() - new Date(j.startedAt).getTime()) + '</span>';
+function toggleJobDetail(idx) {
+  const wasExpanded = expandedJobIndex === idx;
+  // Collapse any currently expanded row
+  if (expandedJobIndex !== null) {
+    const oldDetail = document.getElementById('job-detail-' + expandedJobIndex);
+    const oldChevron = document.getElementById('job-chevron-' + expandedJobIndex);
+    const oldRow = oldDetail?.previousElementSibling;
+    if (oldDetail) oldDetail.style.display = 'none';
+    if (oldChevron) oldChevron.classList.remove('open');
+    if (oldRow) oldRow.classList.remove('expanded');
   }
-  if ((j.status === 'done' || j.status === 'failed') && j.duration_ms) {
-    return formatDuration(j.duration_ms);
-  }
-  return '<span class="text-dim">—</span>';
+  if (wasExpanded) { expandedJobIndex = null; return; }
+  // Expand the clicked row
+  const detail = document.getElementById('job-detail-' + idx);
+  const chevron = document.getElementById('job-chevron-' + idx);
+  const row = detail?.previousElementSibling;
+  if (detail) detail.style.display = '';
+  if (chevron) chevron.classList.add('open');
+  if (row) row.classList.add('expanded');
+  expandedJobIndex = idx;
 }
 
-function renderStats(j) {
+function renderJobDetail(j) {
+  const sections = [];
+
+  // ── Stats grid ──
+  const stats = [];
+  if (j.status === 'processing' && j.startedAt) {
+    stats.push({ label: 'Duration', value: '<span class="pulse" data-started="' + esc(j.startedAt) + '">' + formatDuration(Date.now() - new Date(j.startedAt).getTime()) + '</span>', color: 'var(--accent)' });
+  } else if (j.duration_ms) {
+    stats.push({ label: 'Duration', value: formatDuration(j.duration_ms), color: 'var(--text)' });
+  }
+  if (j.entriesCreated != null) {
+    stats.push({ label: 'Entries Created', value: '+' + j.entriesCreated, color: j.entriesCreated > 0 ? 'var(--green)' : 'var(--text3)' });
+  }
+  if (j.transcriptTokens != null) {
+    stats.push({ label: 'Transcript Size', value: formatCompact(j.transcriptTokens) + ' tokens', color: 'var(--text)' });
+  }
+  if (j.inputTokens != null) {
+    stats.push({ label: 'Input Tokens', value: formatCompact(j.inputTokens), color: 'var(--accent)' });
+  }
+  if (j.outputTokens != null) {
+    stats.push({ label: 'Output Tokens', value: formatCompact(j.outputTokens), color: 'var(--purple)' });
+  }
+  if (stats.length > 0) {
+    sections.push('<div class="job-detail-grid">' +
+      stats.map(s =>
+        '<div class="job-detail-stat">' +
+          '<div class="job-detail-stat-label">' + s.label + '</div>' +
+          '<div class="job-detail-stat-value" style="color:' + s.color + '">' + s.value + '</div>' +
+        '</div>'
+      ).join('') +
+    '</div>');
+  }
+
+  // ── Token proportion bar ──
+  if (j.inputTokens != null && j.outputTokens != null) {
+    const total = j.inputTokens + j.outputTokens;
+    const inputPct = total > 0 ? (j.inputTokens / total * 100).toFixed(1) : '50.0';
+    const outputPct = total > 0 ? (j.outputTokens / total * 100).toFixed(1) : '50.0';
+    sections.push(
+      '<div class="token-bar-wrap">' +
+        '<span class="mono" style="font-size:11px;color:var(--accent);">input ' + inputPct + '%</span>' +
+        '<div class="token-bar">' +
+          '<div class="token-bar-input" style="width:' + inputPct + '%;"></div>' +
+          '<div class="token-bar-output" style="width:' + outputPct + '%;"></div>' +
+        '</div>' +
+        '<span class="mono" style="font-size:11px;color:var(--purple);">output ' + outputPct + '%</span>' +
+      '</div>'
+    );
+  }
+
+  // ── Session (session-mine only) ──
+  if (j.sessionId) {
+    sections.push(
+      '<div class="job-session-row">' +
+        '<span style="color:var(--text3);">Session:</span> ' +
+        '<code>' + esc(j.sessionId) + '</code> ' +
+        '<button class="btn-copy" onclick="event.stopPropagation();copySessionResume(\'' + esc(j.sessionId) + '\', this)" title="Copy resume command">&#x2398; Resume</button>' +
+      '</div>'
+    );
+  }
+
+  // ── Working directory ──
+  if (j.cwd) {
+    const home = j.cwd.replace(/^\/Users\/[^/]+/, '~');
+    sections.push(
+      '<div class="job-path" style="margin-top:8px;">' +
+        '<span style="color:var(--text3);">Working directory:</span> ' + esc(home) +
+      '</div>'
+    );
+  }
+
+  // ── Reason ──
+  if (j.reason) {
+    sections.push(
+      '<div style="margin-top:8px;font-size:12px;color:var(--text2);">' +
+        '<span style="color:var(--text3);">Reason:</span> ' + esc(j.reason) +
+      '</div>'
+    );
+  }
+
+  // ── Timestamps ──
+  const ts = [];
+  if (j.createdAt) ts.push('Created: ' + new Date(j.createdAt).toLocaleString());
+  if (j.startedAt) ts.push('Started: ' + new Date(j.startedAt).toLocaleString());
+  if (j.completedAt) ts.push('Completed: ' + new Date(j.completedAt).toLocaleString());
+  if (j.failedAt) ts.push('Failed: ' + new Date(j.failedAt).toLocaleString());
+  if (ts.length > 0) {
+    sections.push(
+      '<div class="job-timestamps">' + ts.map(t => '<span>' + t + '</span>').join('') + '</div>'
+    );
+  }
+
+  // ── Error box (failed jobs) ──
   if (j.status === 'failed' && j.error) {
-    return '<span class="mono" style="color:var(--red);max-width:280px;display:inline-block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + esc(j.error) + '">' + esc(j.error) + '</span>';
+    sections.push(
+      '<div class="job-error-box">' +
+        '<div class="job-error-label">Error</div>' +
+        '<div class="job-error-text">' + esc(j.error) + '</div>' +
+      '</div>'
+    );
   }
-  const parts = [];
-  if (j.entriesCreated != null) parts.push('<span class="mono" style="color:var(--green)">+' + j.entriesCreated + ' entries</span>');
-  if (j.inputTokens != null || j.outputTokens != null) {
-    const tok = [];
-    if (j.inputTokens != null) tok.push(formatCompact(j.inputTokens) + ' input');
-    if (j.outputTokens != null) tok.push(formatCompact(j.outputTokens) + ' output');
-    parts.push('<span class="mono text-dim">' + tok.join(', ') + ' tokens</span>');
+
+  // ── File reference ──
+  if (j.filename) {
+    sections.push(
+      '<div style="margin-top:12px;font-size:10px;color:var(--text3);font-family:var(--font);">' +
+        'File: ' + esc(j.filename) +
+      '</div>'
+    );
   }
-  return parts.length > 0 ? parts.join(' <span class="text-dim" style="opacity:0.4">·</span> ') : '<span class="text-dim">—</span>';
+
+  return sections.join('');
 }
 
 function formatDuration(ms) {
@@ -1198,7 +1371,7 @@ function renderContexts() {
   const filtered = getFilteredContexts();
 
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:32px;">No contexts match filters</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:32px;">No contexts match filters</td></tr>';
     paginationEl.style.display = 'none';
     return;
   }
@@ -1239,6 +1412,7 @@ function renderContexts() {
       '</td>' +
       '<td><span class="scope-badge scope-' + c.scope + '">' + c.scope + '</span></td>' +
       '<td class="mono">' + esc(c.project || '\u2014') + '</td>' +
+      '<td class="mono text-dim">' + (c.tokens > 0 ? formatCompact(c.tokens) : '\u2014') + '</td>' +
       '<td>' + scoreHtml + '</td>' +
       '<td>' + renderMiniSparkline(sig ? sig.searchHits : null, 30) + '</td>' +
       '<td class="mono text-dim has-tooltip" data-tooltip="' + esc(new Date(c.updated).toLocaleString()) + '">' + timeAgo(c.updated) + '</td>' +
@@ -1268,6 +1442,7 @@ function openContext(id) {
     <span class="scope-badge scope-${selectedContext.scope}">${selectedContext.scope}</span>
     ${selectedContext.project ? '<span class="mono" style="color:var(--text2)">' + esc(selectedContext.project) + '</span>' : ''}
     <span class="mono text-dim">${selectedContext.id}</span>
+    ${selectedContext.tokens > 0 ? '<span class="mono text-dim">' + formatCompact(selectedContext.tokens) + ' tokens</span>' : ''}
     <span class="mono text-dim">${new Date(selectedContext.updated).toLocaleString()}</span>
     ${(selectedContext.tags||[]).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}
   `;
@@ -1310,6 +1485,13 @@ async function openContextFromSearch(id) {
 
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function copySessionResume(sessionId, btn) {
+  copyToClipboard('claude --resume ' + sessionId);
+  const orig = btn.innerHTML;
+  btn.textContent = '\u2713';
+  setTimeout(() => { btn.innerHTML = orig; }, 1500);
 }
 
 function closeModal() {

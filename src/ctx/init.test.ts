@@ -10,7 +10,7 @@ import {
   buildSessionPrompt,
 } from "./init.ts";
 
-const TEST_DIR = join(tmpdir(), `omni-init-test-${Date.now()}`);
+const TEST_DIR = join(tmpdir(), `ctx-hive-init-test-${Date.now()}`);
 
 afterAll(async () => {
   await rm(TEST_DIR, { recursive: true, force: true });
@@ -197,9 +197,9 @@ test("buildSessionPrompt includes instructions for reading sessions", () => {
     false,
   );
 
-  expect(prompt).toContain("Decisions made");
-  expect(prompt).toContain("Recurring themes");
-  expect(prompt).toContain("Developer preferences");
+  expect(prompt).toContain("Rejected alternatives");
+  expect(prompt).toContain("Debugging breakthroughs");
+  expect(prompt).toContain("Cross-service discoveries");
   expect(prompt).toContain("first ~200 lines");
 });
 

@@ -132,11 +132,10 @@ function renderCheckboxList(repos: RepoInfo[], checked: boolean[], cursor: numbe
 }
 
 function clearLines(n: number): void {
-  // Move up n lines and erase each
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n - 1; i++) {
     process.stdout.write("\x1b[2K\x1b[1A");
   }
-  process.stdout.write("\x1b[2K"); // erase the top line too
+  process.stdout.write("\x1b[2K\r");
 }
 
 /**
@@ -329,6 +328,17 @@ export async function checkExistingContext(
   );
 }
 
+// ── Project Overview lookup ────────────────────────────────────────────
+
+export async function findProjectOverview(projectName: string): Promise<IndexEntry | null> {
+  const index = await loadIndex();
+  return (
+    index.find(
+      (e) => e.project === projectName && e.tags.includes("project-overview"),
+    ) ?? null
+  );
+}
+
 // ── Prompt building ────────────────────────────────────────────────────
 
 function existingEntriesBlock(existing: IndexEntry[], isUpdate: boolean): string {
@@ -363,12 +373,14 @@ ${isUpdate ? "\nTo delete outdated entries:\n```\nctx-hive delete <id> --force\n
 
 /**
  * Build prompt for the Repo Analyzer agent.
+ * Creates/updates the Project Overview entry + finds hidden context insights.
  */
 export function buildRepoPrompt(
   meta: RepoMeta,
   repoContext: RepoContext,
   existing: IndexEntry[],
   isUpdate: boolean,
+  overviewEntry?: IndexEntry | null,
 ): string {
   const sections: string[] = [];
 
@@ -389,35 +401,64 @@ export function buildRepoPrompt(
   sections.push(`
 ## Instructions
 
-You are analyzing the repository "${meta.name}" to generate Context Hive entries based on the **code and architecture**.
+You have TWO tasks for "${meta.name}":
 
-### Your task:
-1. **Explore the repository** — use Glob, Grep, and Read to understand the codebase structure, key patterns, architecture decisions, and conventions.
-2. **Generate context entries** using \`ctx-hive add\` for each insight worth preserving.
+### Task 1: Create/Update the Project Overview
 
-### Focus areas:
-- Architecture decisions and patterns (why things are structured this way)
-- Key abstractions and conventions (naming, file organization, error handling)
-- Non-obvious gotchas or constraints
-- Cross-cutting concerns (auth, logging, error handling patterns)
-- Build/deploy/test conventions not captured in CLAUDE.md
+${overviewEntry ? `An existing Project Overview entry exists (id: ${overviewEntry.id}). Read it with \`ctx-hive show ${overviewEntry.id}\`, then delete it and create an updated version.` : "No Project Overview exists yet. Create one from scratch."}
 
-### Scope definitions:
-- **project**: Specific to this repo — architecture, patterns, key decisions, gotchas
-- **org**: Cross-repo patterns — shared conventions, infrastructure, team practices
+Explore the repository thoroughly (Glob, Grep, Read), then create a single entry with:
+- **Title**: "Project Overview: ${meta.name}"
+- **Scope**: project
+- **Tags**: project-overview
+- **Project**: ${meta.name}
+
+The body MUST contain these 4 sections:
+
+**## Architecture**
+What the project does at a high level. Key components and how they connect. Tech stack and runtime. Data flow.
+
+**## Capabilities**
+What the project can do: CLI commands, API endpoints, supported integrations, features, user-facing functionality.
+
+**## Dependencies & Boundaries**
+External services, libraries, and systems this project depends on. What depends on this project. Integration contracts and protocols.
+
+**## Recent Changes**
+Leave this empty for a full scan — it will be maintained by incremental git hook updates.
+
+${overviewEntry ? `\nTo update: first delete the old entry, then create the new one:\n\`\`\`\nctx-hive delete ${overviewEntry.id} --force\n\`\`\`` : ""}
+
+### Task 2: Find Hidden Context Insights
+
+After creating the Project Overview, look for insights that **cannot be derived from reading the code**:
+- **Decision rationale** — WHY was this approach chosen over alternatives?
+- **Gotchas and landmines** — things that look correct but break in surprising ways
+- **Cross-service boundaries** — integration contracts, what happens if a dependency is down
+- **Organizational constraints** — compliance requirements, security boundaries
+
+For each insight, create a separate entry (scope: project, tags relevant to the topic).
+
+**Do NOT create insight entries for:**
+- Code structure or architecture (that's in the Project Overview)
+- Build/test commands (belong in CLAUDE.md)
+- How a specific function works (an AI can read the code)
+
+### Entry format for insight entries:
+- **Title**: Actionable statement or warning, not a description
+  - Good: "Don't use playbooks for SIEM forwarding — 7-hop overhead and recursion risk"
+  - Bad: "Export Audit Log to SIEM design decisions"
+- **Body**: Lead with the insight. Then WHY. Then WHEN this matters. 3-8 lines.
 
 ### Rules:
-- Each entry must be **self-contained** — useful without additional context
-- Focus on **decisions, patterns, and conventions** — not code snippets
-- Don't duplicate what's already in CLAUDE.md
-- Use descriptive titles and relevant tags
-- Keep entry bodies concise but informative (3-10 lines)
-- Generate 5-10 entries
-- For project-scope entries, always include --project "${meta.name}"
+- Always create the Project Overview (Task 1)
+- Generate 0-5 insight entries (Task 2) — quality over quantity, 0 is fine
+- For all entries, include --project "${meta.name}"
+- Don't duplicate what's in CLAUDE.md
 
 ${ctxAddInstructions(meta, isUpdate)}
 
-Now explore the repository and generate context entries.`);
+Now explore the repository, create the Project Overview, and generate insight entries if any. Start with Task 1.`);
 
   return sections.join("\n");
 }
@@ -435,7 +476,10 @@ export function buildSessionPrompt(
 
   return `# Session Miner: ${meta.name}
 
-You are mining past Claude Code session histories for the project "${meta.name}" to extract valuable context worth persisting.
+You are mining past Claude Code session histories for the project "${meta.name}" to extract context that **cannot be derived from reading the code**.
+
+## The "Can't Derive From Code" test
+Before creating any entry, ask: "If an AI read the entire codebase, would it still miss this?" If the answer is no, do NOT create the entry. The code already tells that story.
 
 ## Session files (JSONL format, newest first)
 
@@ -456,37 +500,142 @@ Skip these:
 ## How to read sessions efficiently
 
 1. Start by reading the first ~200 lines and last ~100 lines of each session file to get an overview
-2. Identify sessions that contain substantive discussions (decisions, explanations, debugging insights)
+2. Look for sessions with debates, rejected approaches, or user-stated constraints
 3. For promising sessions, read more deeply to extract the key insights
 
 ${existingEntriesBlock(existing, isUpdate)}
 
-## What to extract
+## Extract ONLY these types of insights:
 
-Look for:
-- **Decisions made** — "we decided to use X because Y", "let's go with approach A"
-- **Recurring themes** — topics that come up across multiple sessions
-- **Developer preferences** — coding style, tool preferences, workflow patterns
-- **Debugging insights** — "the issue was X, the fix was Y" (if it reveals a pattern)
-- **Architecture discussions** — why things were built a certain way
-- **Gotchas discovered** — "watch out for X when doing Y"
+1. **Rejected alternatives** — "We tried X but switched to Y because Z." The rejected path is the valuable part — it prevents someone from going down the same dead end.
+   - Example: "Don't use playbooks for high-frequency event forwarding — tried it, 7-hop overhead and recursion risk made it unviable"
+
+2. **Debugging breakthroughs** — Not "the fix was X" (that's in the commit), but "the symptom looked like A but the root cause was actually B." The diagnostic insight that saves hours next time.
+   - Example: "gRPC certificate_verify_failed after mTLS migration — root cause is missing internal CA in GrpcChannelFactory, not expired certs"
+
+3. **Cross-service discoveries** — "When service A does X, service B breaks because Y." Integration knowledge that spans repos and can't be seen from one codebase.
+   - Example: "policy service must be up before scan-engine starts — scan-engine graph build fails without policy provider"
+
+4. **Explicit constraints from the user** — "We can't do X because of compliance/legal/SLA/team capacity." Business constraints that shape technical decisions and aren't written in code.
+   - Example: "LLM scanning requires explicit account opt-in for legal reasons — not a technical limitation"
+
+## Do NOT extract:
+- Code patterns or architecture descriptions (an AI can read the code)
+- Generic Claude workflow tips (not project context)
+- Step-by-step debugging logs (the fix is already committed)
+- Implementation details of completed work (derivable from the committed code)
+- Branch names, commit hashes, or session-specific ephemera
+- Developer preferences like coding style (these belong in CLAUDE.md)
 
 ### Scope definitions:
-- **project**: Specific to this repo — discovered patterns, decisions, gotchas
-- **org**: Cross-repo patterns — shared conventions, team practices
-- **personal**: Developer preferences — workflow habits, tool preferences, coding style
+- **project**: Specific to this repo — rejected approaches, debugging insights, cross-service gotchas
+- **org**: Cross-repo knowledge — integration points, shared constraints, team decisions
+- **personal**: User-specific constraints or context that affects how they work
+
+### Entry format:
+- **Title**: Actionable statement or warning, not a description.
+  - Good: "Don't mock the database in scan-engine E2E tests — mock/prod divergence masked a broken migration last quarter"
+  - Bad: "Testing patterns and decisions"
+- **Body**: What was tried or discovered → Why it matters → When this applies to future work. 3-8 lines.
+- Each entry must be **self-contained** — useful without additional context
 
 ### Rules:
-- Each entry must be **self-contained** — useful without additional context
-- Focus on **insights and decisions** — not conversation summaries
-- Use descriptive titles and relevant tags
-- Keep entry bodies concise but informative (3-10 lines)
-- Generate 3-8 entries
+- Generate 2-5 entries (fewer, higher quality)
+- If no sessions contain insights that pass the "Can't Derive From Code" test, generate 0 entries — that's fine
 - For project-scope entries, always include --project "${meta.name}"
 
 ${ctxAddInstructions(meta, isUpdate)}
 
-Now read the session files and generate context entries.`;
+Now read the session files and generate context entries. Remember: only things an AI couldn't figure out by reading the code.`;
+}
+
+// ── Git change prompt ─────────────────────────────────────────────────
+
+export interface GitChangeDetails {
+  trigger: "push" | "pull-merge" | "pull-rebase";
+  commitMessages: string;
+  changedFiles: string;
+  diffSummary: string;
+}
+
+export function buildGitChangePrompt(
+  meta: RepoMeta,
+  existing: IndexEntry[],
+  isUpdate: boolean,
+  details: GitChangeDetails,
+  overviewEntry?: IndexEntry | null,
+): string {
+  const triggerLabel =
+    details.trigger === "push" ? "pushed commits" :
+    details.trigger === "pull-merge" ? "pulled changes (merge)" :
+    "pulled changes (rebase)";
+
+  return `# Project Overview Updater: ${meta.name}
+
+You are maintaining the Project Overview for "${meta.name}" after ${triggerLabel}.
+
+## What changed
+
+### Commits
+${details.commitMessages || "(no commit messages available)"}
+
+### Changed files
+${details.changedFiles || "(no file list available)"}
+
+### Diff summary
+${details.diffSummary || "(no diff summary available)"}
+
+## Instructions
+
+${overviewEntry
+  ? `A Project Overview entry exists (id: ${overviewEntry.id}). Read it with:
+\`\`\`
+ctx-hive show ${overviewEntry.id}
+\`\`\``
+  : "No Project Overview exists yet. You need to explore the repo and create one from scratch."}
+
+### Your task:
+1. ${overviewEntry ? `Read the existing Project Overview with \`ctx-hive show ${overviewEntry.id}\`` : "Explore the repository to understand its architecture and capabilities"}
+2. Read the changed files to understand what was modified
+3. Determine if the changes affect **Architecture**, **Capabilities**, **Dependencies & Boundaries**, or are notable enough for **Recent Changes**
+4. ${overviewEntry ? "If changes are significant: delete the old entry and create an updated one. If changes are trivial (formatting, tests, minor fixes): do nothing." : "Create the Project Overview entry."}
+
+### Project Overview entry format:
+- **Title**: "Project Overview: ${meta.name}"
+- **Scope**: project
+- **Tags**: project-overview
+- **Project**: ${meta.name}
+
+The body MUST contain these 4 sections:
+
+**## Architecture**
+What the project does at a high level. Key components and how they connect. Tech stack and runtime.
+
+**## Capabilities**
+What the project can do: CLI commands, API endpoints, integrations, features.
+
+**## Dependencies & Boundaries**
+External services/systems this depends on. What depends on it. Integration contracts.
+
+**## Recent Changes**
+Brief summaries of notable recent changes. Keep only the last 5 entries. Add the current change at the top if it's notable.
+Format: \`- [YYYY-MM-DD] Brief description of what changed\`
+
+${overviewEntry ? `### To update:
+\`\`\`
+ctx-hive delete ${overviewEntry.id} --force
+\`\`\`
+Then create the new version with \`ctx-hive add\`.` : ""}
+
+### Rules:
+- If the changes don't affect architecture, capabilities, or dependencies, and aren't notable — **do nothing**. Routine bug fixes, test changes, and formatting don't need updates.
+- When updating, preserve the existing content for sections that weren't affected by the changes.
+- For the Recent Changes section, carry forward previous entries and add the new one at the top.
+- Always include --project "${meta.name}" and --tags "project-overview"
+
+${ctxAddInstructions(meta, isUpdate)}
+
+Now analyze the changes and update the Project Overview if warranted.`;
 }
 
 // ── Process a single repo ──────────────────────────────────────────────
@@ -525,7 +674,8 @@ async function processRepo(
   // 3. Check existing context
   const existing = await checkExistingContext(meta.name);
   const isUpdate = existing.length > 0;
-  if (verbose) console.log(`  Existing entries: ${existing.length} (${isUpdate ? "update" : "init"} mode)`);
+  const overviewEntry = await findProjectOverview(meta.name);
+  if (verbose) console.log(`  Existing entries: ${existing.length} (${isUpdate ? "update" : "init"} mode), overview: ${overviewEntry ? overviewEntry.id : "none"}`);
 
   // 4. Discover session files
   let sessionPaths: string[] = [];
@@ -535,7 +685,7 @@ async function processRepo(
   }
 
   // 5. Build prompts
-  const repoPrompt = buildRepoPrompt(meta, repoContext, existing, isUpdate);
+  const repoPrompt = buildRepoPrompt(meta, repoContext, existing, isUpdate, overviewEntry);
   const sessionPrompt = !noSessions && sessionPaths.length > 0
     ? buildSessionPrompt(meta, sessionPaths, existing, isUpdate)
     : null;

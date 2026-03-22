@@ -14,6 +14,8 @@ export interface PipelineResult<T> {
   error?: string;
   cost_usd: number;
   duration_ms: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface PhaseSummary<T> {
@@ -41,6 +43,8 @@ export async function runParallel<T>(tasks: PipelineTask<T>[]): Promise<PhaseSum
             error: `Agent '${task.name}' exited with code ${exitCode}`,
             cost_usd: result?.total_cost_usd ?? 0,
             duration_ms: result?.duration_ms ?? 0,
+            inputTokens: result?.usage.input_tokens,
+            outputTokens: result?.usage.output_tokens,
           } satisfies PipelineResult<T>;
         }
 
@@ -52,6 +56,8 @@ export async function runParallel<T>(tasks: PipelineTask<T>[]): Promise<PhaseSum
           data,
           cost_usd: result.total_cost_usd,
           duration_ms: result.duration_ms,
+          inputTokens: result.usage.input_tokens,
+          outputTokens: result.usage.output_tokens,
         } satisfies PipelineResult<T>;
       } catch (err) {
         return {

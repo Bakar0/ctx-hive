@@ -1,6 +1,7 @@
 import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { z } from "zod";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -26,11 +27,22 @@ export interface Entry extends EntryMeta {
 
 // ── Paths ──────────────────────────────────────────────────────────────
 
-const HIVE_ROOT = join(homedir(), ".omni", "context-hive");
+const HIVE_ROOT = join(homedir(), ".ctx-hive");
 const ENTRIES_DIR = join(HIVE_ROOT, "entries");
 const INDEX_PATH = join(HIVE_ROOT, "index.json");
 
 export const SCOPES: Scope[] = ["project", "org", "personal"];
+
+const IndexEntrySchema = z.array(z.object({
+  id: z.string(),
+  title: z.string(),
+  scope: z.enum(["project", "org", "personal"]),
+  tags: z.array(z.string()),
+  project: z.string(),
+  created: z.string(),
+  updated: z.string(),
+  path: z.string(),
+}));
 
 export function isScope(value: string): value is Scope {
   return (SCOPES as string[]).includes(value);
@@ -221,9 +233,7 @@ export async function loadIndex(): Promise<IndexEntry[]> {
   if (!(await file.exists())) {
     return rebuildIndex();
   }
-  const data: unknown = await file.json();
-  // oxlint-disable-next-line no-unsafe-type-assertion -- index.json is self-managed
-  return data as IndexEntry[];
+  return IndexEntrySchema.parse(await file.json());
 }
 
 // ── Lookup by ID or slug ───────────────────────────────────────────────

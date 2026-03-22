@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { loadIndex, hiveRoot, type IndexEntry } from "./store.ts";
 import type { Scope } from "./store.ts";
 import { getSignalScores, recordSearchHits } from "./signals.ts";
+import { appendSearchRecord, type SearchSource } from "./search-history.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -89,11 +90,20 @@ function extractExcerpt(body: string, tokens: string[], maxLen = 150): string {
 
 // ── Search ─────────────────────────────────────────────────────────────
 
+export interface SearchMeta {
+  source?: SearchSource;
+  project?: string;
+  cwd?: string;
+  sessionId?: string;
+}
+
 export async function search(
   query: string,
   filters: SearchFilters = {},
-  limit = 10
+  limit = 10,
+  meta?: SearchMeta,
 ): Promise<SearchResult[]> {
+  const start = Date.now();
   const index = await loadIndex();
   const tokens = tokenize(query);
   if (tokens.length === 0) return [];
@@ -147,12 +157,33 @@ export async function search(
     }
   }
 
-  // Sort by score descending
+  // Sort by score descending and normalize to 0-1
   results.sort((a, b) => b.score - a.score);
+  const maxScore = results.length > 0 ? results[0]!.score : 1;
   const finalResults = results.slice(0, limit);
+  if (maxScore > 0) {
+    for (const r of finalResults) {
+      r.score = Math.round((r.score / maxScore) * 100) / 100;
+    }
+  }
 
   // Fire-and-forget: record which entries were served
   void recordSearchHits(finalResults.map((r) => r.id));
+
+  // Record search event to history (awaited to prevent process.exit race)
+  if (meta?.source) {
+    await appendSearchRecord({
+      timestamp: new Date().toISOString(),
+      source: meta.source,
+      query,
+      project: meta.project,
+      cwd: meta.cwd,
+      sessionId: meta.sessionId,
+      resultCount: finalResults.length,
+      results: finalResults.map((r) => ({ id: r.id, title: r.title, score: r.score })),
+      durationMs: Date.now() - start,
+    });
+  }
 
   return finalResults;
 }
@@ -167,7 +198,7 @@ export function formatHuman(results: SearchResult[]): string {
       const tags = r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
       return [
         `${i + 1}. ${r.title}${tags}`,
-        `   id: ${r.id}  scope: ${r.scope}  score: ${r.score}`,
+        `   id: ${r.id}  scope: ${r.scope}  relevance: ${r.score}`,
         `   ${r.excerpt}`,
       ].join("\n");
     })
@@ -184,7 +215,7 @@ export function formatMarkdown(results: SearchResult[]): string {
   return results
     .map((r) => {
       const tags = r.tags.length > 0 ? `  \nTags: ${r.tags.join(", ")}` : "";
-      return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **score:** ${r.score}${tags}\n\n${r.excerpt}`;
+      return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score}${tags}\n\n${r.excerpt}`;
     })
     .join("\n\n---\n\n");
 }

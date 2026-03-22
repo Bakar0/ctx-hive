@@ -156,7 +156,7 @@ async function ctxSearch(args: string[]): Promise<void> {
   const limit = parseInt(getFlag(args, "--limit") ?? "10", 10);
   const format = getFlag(args, "--format") ?? "human";
 
-  const results = await search(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit);
+  const results = await search(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit, { source: "cli" });
 
   if (format === "json") {
     console.log(formatJson(results, query));

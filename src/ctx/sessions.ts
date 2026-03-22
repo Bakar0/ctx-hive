@@ -67,26 +67,54 @@ export async function getSessionFilePaths(
 
 // ── Extract served entry IDs from a transcript ──────────────────────
 
-// Matches the **id:** <8-hex> format from formatMarkdown output
+export type ServedSource = "inject" | "search" | "unknown";
+
+export interface ServedEntryInfo {
+  id: string;
+  source: ServedSource;
+}
+
+// Matches **id:** <8-hex> optionally followed by **source:** inject on the same line
+const ENTRY_ID_WITH_SOURCE_PATTERN = /\*\*id:\*\*\s*([0-9a-f]{8})[^\n]*?\*\*source:\*\*\s*(inject|search)/g;
+// Fallback: just the id without source marker
 const ENTRY_ID_PATTERN = /\*\*id:\*\*\s*([0-9a-f]{8})/g;
 
 /**
  * Scan a session JSONL transcript for entry IDs that appeared in
- * ctx-hive search results (formatMarkdown output).
+ * ctx-hive search results or injections. Returns enriched info
+ * with source detection (inject vs search vs unknown).
  */
-export async function extractServedEntries(transcriptPath: string): Promise<string[]> {
+export async function extractServedEntriesWithSource(transcriptPath: string): Promise<ServedEntryInfo[]> {
   const file = Bun.file(transcriptPath);
   if (!(await file.exists())) return [];
 
   const content = await file.text();
-  const ids = new Set<string>();
+  const result = new Map<string, ServedSource>();
 
+  // First pass: find entries with explicit source markers
   let match: RegExpExecArray | null;
-  while ((match = ENTRY_ID_PATTERN.exec(content)) !== null) {
-    if (match[1] !== undefined) {
-      ids.add(match[1]);
+  while ((match = ENTRY_ID_WITH_SOURCE_PATTERN.exec(content)) !== null) {
+    if (match[1] !== undefined && match[2] !== undefined) {
+      const source: ServedSource = match[2] === "inject" ? "inject" : "search";
+      result.set(match[1], source);
     }
   }
 
-  return [...ids];
+  // Second pass: find any remaining IDs without source markers
+  ENTRY_ID_PATTERN.lastIndex = 0;
+  while ((match = ENTRY_ID_PATTERN.exec(content)) !== null) {
+    if (match[1] !== undefined && !result.has(match[1])) {
+      result.set(match[1], "unknown");
+    }
+  }
+
+  return [...result.entries()].map(([id, source]) => ({ id, source }));
+}
+
+/**
+ * Backward-compatible: returns just the IDs.
+ */
+export async function extractServedEntries(transcriptPath: string): Promise<string[]> {
+  const entries = await extractServedEntriesWithSource(transcriptPath);
+  return entries.map((e) => e.id);
 }

@@ -43,6 +43,12 @@ if (command === "enqueue") {
   process.exit(0);
 }
 
+if (command === "inject") {
+  const { handleInject } = await import("./inject/hook.ts");
+  await handleInject();
+  process.exit(0);
+}
+
 if (command === "serve") {
   await serve(args.slice(1));
   // serve is long-running, no process.exit here

@@ -328,6 +328,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
         Repos
       </div>
+      <div class="nav-item" data-page="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Search
+      </div>
     </nav>
     <div class="sidebar-footer">
       <span class="ws-dot" id="ws-status"></span>
@@ -538,6 +542,63 @@
         <p>No repositories found.</p>
       </div>
     </div>
+
+    <!-- ════════ SEARCH ════════ -->
+    <div class="page" id="page-search">
+      <div class="page-header">
+        <h1>Search & Injection <button class="btn btn-sm" id="search-refresh" style="margin-left:12px;vertical-align:middle;">Refresh</button></h1>
+        <p>Search history, injection tracking, and efficiency metrics</p>
+      </div>
+
+      <div class="stats" id="search-stats"></div>
+
+      <div class="charts">
+        <div class="chart-card">
+          <div class="chart-title">Source Breakdown</div>
+          <div id="chart-search-source" class="donut-wrap"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Top Served Entries</div>
+          <div id="chart-top-served" class="bar-chart"></div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-header">
+          <h3>Search History</h3>
+          <div style="font-size:12px;color:var(--text2);margin:8px 0 0;display:flex;flex-direction:column;gap:4px;">
+            <div><span class="badge" style="background:var(--purple);color:#fff;font-size:10px;min-width:42px;text-align:center;display:inline-block;">inject</span> auto-injected into Claude on every message (invisible to you, visible to Claude)</div>
+            <div><span class="badge" style="background:var(--accent);color:#fff;font-size:10px;min-width:42px;text-align:center;display:inline-block;">cli</span> manual <code>ctx-hive search</code> in terminal</div>
+            <div><span class="badge" style="background:var(--green);color:#fff;font-size:10px;min-width:42px;text-align:center;display:inline-block;">api</span> search via daemon REST API</div>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Source</th>
+                <th>Query</th>
+                <th>Project</th>
+                <th>Results</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody id="search-history-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="pagination">
+        <button class="btn btn-sm" id="search-prev">&larr; Prev</button>
+        <span id="search-page-info"></span>
+        <button class="btn btn-sm" id="search-next">Next &rarr;</button>
+      </div>
+
+      <div class="empty" id="search-empty" style="display:none;">
+        <div class="empty-icon">&#x1F50D;</div>
+        <p>No search history yet. Run <code>ctx-hive search</code> or enable the inject hook.</p>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -575,6 +636,10 @@ const jobsPageSize = 20;
 let ctxPage = 1;
 const ctxPageSize = 25;
 let ctxSearchTimer = null;
+let allSearchHistory = [];
+let searchStats = null;
+let searchPage = 1;
+const searchPageSize = 20;
 
 // ── Navigation ────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -587,6 +652,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     if (currentPage === 'jobs') fetchJobs();
     if (currentPage === 'contexts') fetchContexts();
     if (currentPage === 'repos') fetchTrackedRepos();
+    if (currentPage === 'search') fetchSearchData();
   });
 });
 
@@ -1231,6 +1297,17 @@ function openContext(id) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
+async function openContextFromSearch(id) {
+  if (allContexts.length === 0) {
+    try {
+      const [ctxRes, sigRes] = await Promise.all([fetch('/api/contexts'), fetch('/api/signals')]);
+      allContexts = await ctxRes.json();
+      try { const sig = await sigRes.json(); allSignals = sig.entries || {}; } catch { allSignals = {}; }
+    } catch { return; }
+  }
+  openContext(id);
+}
+
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).catch(() => {});
 }
@@ -1545,6 +1622,161 @@ setInterval(() => {
     el.textContent = formatDuration(elapsed);
   });
 }, 1000);
+
+// ── Search page ──────────────────────────────────────────────────────
+async function fetchSearchData() {
+  try {
+    const [histRes, statsRes] = await Promise.all([
+      fetch('/api/search-history?limit=200'),
+      fetch('/api/search-stats'),
+    ]);
+    allSearchHistory = await histRes.json();
+    searchStats = await statsRes.json();
+    renderSearchStats();
+    renderSearchCharts();
+    renderSearchHistory();
+  } catch {}
+}
+
+function renderSearchStats() {
+  if (!searchStats) return;
+  const s = searchStats;
+  const hitRate = s.totalQueries > 0 ? ((1 - s.zeroResultQueries / s.totalQueries) * 100).toFixed(0) : '0';
+  document.getElementById('search-stats').innerHTML = `
+    <div class="stat-card"><div class="stat-value">${s.totalQueries}</div><div class="stat-label">Total Queries</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--purple)">${s.bySource.inject || 0}</div><div class="stat-label">Injections</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--accent)">${s.bySource.cli || 0}</div><div class="stat-label">CLI Searches</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--green)">${s.bySource.api || 0}</div><div class="stat-label">API Searches</div></div>
+    <div class="stat-card"><div class="stat-value">${hitRate}%</div><div class="stat-label">Hit Rate</div></div>
+    <div class="stat-card"><div class="stat-value">${s.avgScoreOfServed.toFixed(2)}</div><div class="stat-label">Avg Relevance</div></div>
+  `;
+}
+
+function renderSearchCharts() {
+  if (!searchStats) return;
+  const s = searchStats;
+
+  // Source breakdown donut
+  const bySource = {
+    inject: s.bySource.inject || 0,
+    cli: s.bySource.cli || 0,
+    api: s.bySource.api || 0,
+  };
+  const srcEl = document.getElementById('chart-search-source');
+  const total = bySource.inject + bySource.cli + bySource.api;
+  if (total === 0) {
+    srcEl.innerHTML = '<div style="color:var(--text2);text-align:center;padding:40px;">No data yet</div>';
+  } else {
+    // Reuse donut pattern
+    const segments = [
+      { label: 'inject', value: bySource.inject, color: 'var(--purple)' },
+      { label: 'cli', value: bySource.cli, color: 'var(--accent)' },
+      { label: 'api', value: bySource.api, color: 'var(--green)' },
+    ].filter(s => s.value > 0);
+    let offset = 0;
+    const circles = segments.map(seg => {
+      const pct = seg.value / total * 100;
+      const c = `<circle cx="50" cy="50" r="40" fill="none" stroke="${seg.color}" stroke-width="20" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${-offset}" transform="rotate(-90 50 50)"/>`;
+      offset += pct;
+      return c;
+    });
+    const legend = segments.map(seg => `<span class="legend-item"><span class="legend-dot" style="background:${seg.color}"></span>${seg.label}: ${seg.value}</span>`).join('');
+    srcEl.innerHTML = `<svg viewBox="0 0 100 100" width="140" height="140">${circles.join('')}</svg><div class="donut-legend">${legend}</div>`;
+  }
+
+  // Top served entries bar chart
+  const barEl = document.getElementById('chart-top-served');
+  if (s.topServedEntries.length === 0) {
+    barEl.innerHTML = '<div style="color:var(--text2);text-align:center;padding:40px;">No data yet</div>';
+  } else {
+    const maxCount = Math.max(...s.topServedEntries.map(e => e.count));
+    barEl.innerHTML = s.topServedEntries.slice(0, 8).map(e => {
+      const pct = maxCount > 0 ? (e.count / maxCount * 100) : 0;
+      const shortTitle = e.title.length > 35 ? e.title.slice(0, 35) + '...' : e.title;
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <div style="flex:1;min-width:0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(e.title)}">${esc(shortTitle)}</div>
+        <div style="width:120px;height:14px;background:var(--bg);border-radius:3px;overflow:hidden;flex-shrink:0;">
+          <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px;"></div>
+        </div>
+        <div style="width:24px;text-align:right;font-size:11px;color:var(--text2);flex-shrink:0;">${e.count}</div>
+      </div>`;
+    }).join('');
+  }
+}
+
+function renderSearchHistory() {
+  const empty = document.getElementById('search-empty');
+  const body = document.getElementById('search-history-body');
+  if (allSearchHistory.length === 0) {
+    empty.style.display = '';
+    body.innerHTML = '';
+    document.getElementById('search-page-info').textContent = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  const totalPages = Math.ceil(allSearchHistory.length / searchPageSize);
+  if (searchPage < 1) searchPage = 1;
+  if (searchPage > totalPages) searchPage = totalPages;
+  const start = (searchPage - 1) * searchPageSize;
+  const page = allSearchHistory.slice(start, start + searchPageSize);
+
+  const sourceColors = { inject: 'var(--purple)', cli: 'var(--accent)', api: 'var(--green)' };
+
+  body.innerHTML = page.map((r, i) => {
+    const idx = start + i;
+    const color = sourceColors[r.source] || 'var(--text2)';
+    const resultSummary = r.resultCount === 0
+      ? '<span style="color:var(--red);">0</span>'
+      : `<span style="color:var(--green);cursor:pointer;" onclick="toggleSearchResults(${idx})">${r.resultCount} entries</span>`;
+    const queryDisplay = r.query.length > 60 ? esc(r.query.slice(0, 60)) + '...' : esc(r.query);
+    return `<tr>
+      <td style="white-space:nowrap;">${timeAgo(r.timestamp)}</td>
+      <td><span class="badge" style="background:${color};color:#fff;font-size:10px;">${r.source}</span></td>
+      <td title="${esc(r.query)}" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${queryDisplay}</td>
+      <td>${r.project ? esc(r.project) : '<span style="color:var(--text2);">&mdash;</span>'}</td>
+      <td>${resultSummary}</td>
+      <td>${r.durationMs > 0 ? r.durationMs + 'ms' : '<span style="color:var(--text2);">&mdash;</span>'}</td>
+    </tr>
+    <tr class="search-results-row" id="search-results-${idx}" style="display:none;">
+      <td colspan="6" style="padding:8px 16px;background:var(--bg2);">
+        ${r.results.length > 0 ? r.results.map(res =>
+          `<div style="display:flex;gap:8px;align-items:center;padding:2px 0;font-size:12px;">
+            <code style="color:var(--accent);font-size:11px;">${res.id}</code>
+            <a href="#" onclick="event.preventDefault();openContextFromSearch('${res.id}')" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent);text-decoration:none;cursor:pointer;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${esc(res.title)}</a>
+            <span style="color:var(--text2);flex-shrink:0;">relevance: ${res.score.toFixed(2)}</span>
+          </div>`
+        ).join('') : '<span style="color:var(--text2);">No results</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('search-page-info').textContent = `Page ${searchPage} of ${totalPages}`;
+  document.getElementById('search-prev').disabled = searchPage <= 1;
+  document.getElementById('search-next').disabled = searchPage >= totalPages;
+}
+
+function toggleSearchResults(idx) {
+  const row = document.getElementById('search-results-' + idx);
+  if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+
+document.getElementById('search-prev').addEventListener('click', () => { searchPage--; renderSearchHistory(); });
+document.getElementById('search-next').addEventListener('click', () => { searchPage++; renderSearchHistory(); });
+document.getElementById('search-refresh').addEventListener('click', fetchSearchData);
+
+// Auto-refresh search page every 30s when active
+let searchRefreshInterval = null;
+const origNavHandler = document.querySelectorAll('.nav-item');
+origNavHandler.forEach(item => {
+  item.addEventListener('click', () => {
+    if (item.dataset.page === 'search') {
+      if (!searchRefreshInterval) searchRefreshInterval = setInterval(fetchSearchData, 30000);
+    } else {
+      if (searchRefreshInterval) { clearInterval(searchRefreshInterval); searchRefreshInterval = null; }
+    }
+  });
+});
 
 // ── Init ──────────────────────────────────────────────────────────────
 fetchMetrics();

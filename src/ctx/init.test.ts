@@ -143,6 +143,7 @@ test("buildRepoPrompt includes existing entries in update mode", () => {
       project: "my-app",
       created: "2026-01-01T00:00:00Z",
       updated: "2026-01-01T00:00:00Z",
+      tokens: 0,
       path: "entries/project/auth-patterns.md",
     },
   ];
@@ -213,6 +214,7 @@ test("buildSessionPrompt includes existing entries in update mode", () => {
       project: "my-app",
       created: "2026-01-01T00:00:00Z",
       updated: "2026-01-01T00:00:00Z",
+      tokens: 0,
       path: "entries/project/auth-patterns.md",
     },
   ];

@@ -43,6 +43,12 @@ if (command === "enqueue") {
   process.exit(0);
 }
 
+if (command === "backfill-tokens") {
+  const { backfillTranscriptTokens } = await import("./daemon/backfill-tokens.ts");
+  await backfillTranscriptTokens();
+  process.exit(0);
+}
+
 if (command === "inject") {
   const { handleInject } = await import("./inject/hook.ts");
   await handleInject();

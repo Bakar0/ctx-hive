@@ -3,6 +3,7 @@
  * Provides read access to jobs, contexts (entries), and metrics.
  */
 import { join, basename } from "node:path";
+import { unlink } from "node:fs/promises";
 import { z } from "zod";
 import {
   loadIndex,
@@ -271,6 +272,23 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // GET /api/jobs
   if (path === "/api/jobs" && req.method === "GET") {
     return json(await getAllJobs());
+  }
+
+  // POST /api/jobs/:filename/requeue
+  const requeueMatch = /^\/api\/jobs\/(.+)\/requeue$/.exec(path);
+  if (requeueMatch && req.method === "POST") {
+    const filename = decodeURIComponent(requeueMatch[1]!);
+    const failedPath = join(FAILED_DIR, filename);
+    const file = Bun.file(failedPath);
+    if (!(await file.exists())) return json({ error: "Job not found in failed/" }, 404);
+    const data: Record<string, unknown> = RawJobFileSchema.passthrough().parse(JSON.parse(await file.text()));
+    // Strip processing metadata so the job is treated as fresh
+    for (const key of ["_error", "_failedAt", "_startedAt", "_completedAt", "_duration_ms", "_entriesCreated", "_inputTokens", "_outputTokens", "_transcriptTokens"]) {
+      delete data[key];
+    }
+    await Bun.write(join(PENDING_DIR, filename), JSON.stringify(data, null, 2));
+    await unlink(failedPath);
+    return json({ ok: true });
   }
 
   // GET /api/contexts?scope=...&project=...&sortBy=time|project

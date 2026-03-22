@@ -1060,12 +1060,17 @@ function renderJobDetail(j) {
     );
   }
 
-  // ── Error box (failed jobs) ──
+  // ── Error box + rerun button (failed jobs) ──
   if (j.status === 'failed' && j.error) {
     sections.push(
       '<div class="job-error-box">' +
         '<div class="job-error-label">Error</div>' +
         '<div class="job-error-text">' + esc(j.error) + '</div>' +
+      '</div>'
+    );
+    sections.push(
+      '<div style="margin-top:8px;">' +
+        '<button class="btn-copy" onclick="event.stopPropagation();rerunJob(\'' + esc(j.filename) + '\', this)">&#x21bb; Rerun</button>' +
       '</div>'
     );
   }
@@ -1529,6 +1534,27 @@ function copySessionResume(sessionId, btn) {
   const orig = btn.innerHTML;
   btn.textContent = '\u2713';
   setTimeout(() => { btn.innerHTML = orig; }, 1500);
+}
+
+function rerunJob(filename, btn) {
+  const orig = btn.innerHTML;
+  btn.textContent = '\u23f3';
+  btn.disabled = true;
+  fetch('/api/jobs/' + encodeURIComponent(filename) + '/requeue', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        btn.textContent = '\u2713 Queued';
+        setTimeout(() => fetchJobs(), 1000);
+      } else {
+        btn.textContent = '\u2717 ' + (data.error || 'Failed');
+        btn.disabled = false;
+      }
+    })
+    .catch(() => {
+      btn.innerHTML = orig;
+      btn.disabled = false;
+    });
 }
 
 function closeModal() {

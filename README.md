@@ -7,9 +7,12 @@ Persistent context store for Claude Code sessions.
 
 ctx-hive lets you save, search, and reuse organizational knowledge, project context, architectural decisions, and personal notes across Claude Code sessions. It acts as institutional memory — so you never lose the "why" behind code patterns, conventions, and past decisions.
 
-## Quick start
+## Prerequisites
 
-Requires [Bun](https://bun.sh).
+- [Bun](https://bun.sh) runtime (v1.0+)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI — for skill integration, session hooks, and init/update features
+
+## Quick start
 
 ```bash
 git clone https://github.com/Bakar0/ctx-hive.git
@@ -18,20 +21,47 @@ bun install
 bun run dev -- search "your query"
 ```
 
-### Install globally
+## Installation
 
-```bash
-bun run build
-sudo cp ctx-hive /usr/local/bin/ctx-hive
-```
+1. **Clone and install dependencies**
 
-### Install the Claude Code skill
+   ```bash
+   git clone https://github.com/Bakar0/ctx-hive.git
+   cd ctx-hive
+   bun install
+   ```
 
-```bash
-ctx-hive install-skill
-```
+2. **Build and deploy**
 
-This registers ctx-hive as a skill so Claude automatically searches your context hive when making architectural decisions or reviewing unfamiliar code.
+   ```bash
+   bun run deploy    # Compiles binary and copies to ~/.local/bin/ctx-hive
+   ```
+
+3. **Ensure `~/.local/bin` is in your PATH**
+
+   If `which ctx-hive` returns nothing, add this to your shell profile (`~/.zshrc` or `~/.bashrc`):
+
+   ```bash
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+   Then reload: `source ~/.zshrc` (or restart your terminal).
+
+4. **Install integrations**
+
+   ```bash
+   ctx-hive install-skill        # Register as a Claude Code skill
+   ctx-hive install-hook          # Auto-mine sessions when Claude Code exits
+   ctx-hive install-git-hooks     # Enqueue jobs on git push/pull/rebase
+   ```
+
+5. **Start the daemon**
+
+   ```bash
+   ctx-hive serve
+   ```
+
+   The daemon processes background jobs and serves the dashboard at `http://localhost:3939`.
 
 ## Usage
 
@@ -152,11 +182,6 @@ src/
 - **Jobs** (`src/daemon/jobs.ts`) — File-based job queue with zod-validated schemas
 - **Hooks** (`src/hooks/`) — SessionEnd hook and global git hook installers
 - **Repo tracking** (`src/repo/tracking.ts`) — Track/untrack repos for context generation
-
-## Requirements
-
-- [Bun](https://bun.sh) runtime
-- Claude Code (for skill integration and init/update agent features)
 
 ## Development
 

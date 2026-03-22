@@ -79,6 +79,26 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60px; }
   .bar-value { font-size: 10px; color: var(--text2); font-family: var(--font); }
 
+  /* ── Time toggle ───────────────────────────────────────────── */
+  .time-toggle { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .time-btn { background: var(--bg2); border: none; color: var(--text2); padding: 6px 14px;
+    font-size: 12px; cursor: pointer; transition: all 0.15s; border-right: 1px solid var(--border); }
+  .time-btn:last-child { border-right: none; }
+  .time-btn:hover { background: var(--bg3); color: var(--text); }
+  .time-btn.active { background: var(--accent); color: #fff; font-weight: 600; }
+
+  /* ── Line chart ────────────────────────────────────────────── */
+  .line-chart-canvas { width: 100%; height: 180px; position: relative; }
+  .line-chart-canvas svg { width: 100%; height: 100%; }
+  .line-chart-tooltip { position: absolute; background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 8px; font-size: 11px; font-family: var(--font);
+    color: var(--text); pointer-events: none; white-space: nowrap; z-index: 10;
+    opacity: 0; transition: opacity 0.15s; }
+  .line-chart-tooltip.visible { opacity: 1; }
+  .chart-legend { display: flex; gap: 12px; float: right; margin-top: -20px; margin-right: 4px; }
+  .chart-legend span { font-size: 10px; display: flex; align-items: center; gap: 4px; }
+  .chart-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
   /* ── Donut chart ────────────────────────────────────────────── */
   .donut-wrap { display: flex; align-items: center; gap: 24px; }
   .donut-legend { display: flex; flex-direction: column; gap: 6px; }
@@ -387,41 +407,45 @@
   <main class="main">
     <!-- ════════ OVERVIEW ════════ -->
     <div class="page active" id="page-overview">
-      <div class="page-header">
-        <h1>Dashboard</h1>
-        <p>Live overview of your context hive</p>
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Live overview of your context hive</p>
+        </div>
+        <div class="time-toggle" id="overview-time-toggle">
+          <button class="time-btn active" data-window="day">Day</button>
+          <button class="time-btn" data-window="week">Week</button>
+          <button class="time-btn" data-window="month">Month</button>
+        </div>
       </div>
 
       <div class="stats" id="overview-stats"></div>
 
       <div class="charts">
         <div class="chart-card">
-          <div class="chart-title">Jobs by Status</div>
-          <div id="chart-job-status" class="bar-chart"></div>
+          <div class="chart-title">Job Activity</div>
+          <div id="chart-jobs-timeline" class="line-chart-canvas"></div>
         </div>
         <div class="chart-card">
-          <div class="chart-title">Contexts by Scope</div>
-          <div id="chart-scope" class="donut-wrap"></div>
+          <div class="chart-title">Context Lifecycle
+            <span class="chart-legend">
+              <span><span class="chart-legend-dot" style="background:var(--green)"></span> Created</span>
+              <span><span class="chart-legend-dot" style="background:var(--purple)"></span> Updated</span>
+            </span>
+          </div>
+          <div id="chart-contexts-timeline" class="line-chart-canvas"></div>
         </div>
       </div>
 
       <div class="charts">
         <div class="chart-card">
-          <div class="chart-title">Top Projects by Context Count</div>
-          <div id="chart-projects" class="bar-chart"></div>
+          <div class="chart-title">Search Volume</div>
+          <div id="chart-search-timeline" class="line-chart-canvas"></div>
         </div>
         <div class="chart-card">
-          <div class="chart-title">Job Activity (last 30 jobs)</div>
-          <div id="chart-activity"></div>
+          <div class="chart-title">Context Distribution by Project</div>
+          <div id="chart-projects" class="bar-chart"></div>
         </div>
-      </div>
-
-      <div class="table-wrap">
-        <div class="table-header"><h2>Recent Jobs</h2></div>
-        <table>
-          <thead><tr><th>Status</th><th>Type</th><th>Project</th><th>Created</th></tr></thead>
-          <tbody id="overview-recent-jobs"></tbody>
-        </table>
       </div>
     </div>
 
@@ -447,7 +471,7 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th style="width:32px;"></th><th>Status</th><th>Type</th><th>Project</th><th>Created</th></tr></thead>
+          <thead><tr><th style="width:32px;"></th><th>Status</th><th>Type</th><th>Project</th><th>Transcript</th><th>Created</th></tr></thead>
           <tbody id="jobs-tbody"></tbody>
         </table>
       </div>
@@ -589,23 +613,15 @@
 
     <!-- ════════ SEARCH ════════ -->
     <div class="page" id="page-search">
-      <div class="page-header">
-        <h1>Search & Injection <button class="btn btn-sm" id="search-refresh" style="margin-left:12px;vertical-align:middle;">Refresh</button></h1>
-        <p>Search history, injection tracking, and efficiency metrics</p>
+      <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <h1>Search & Injection</h1>
+          <p>Search history, injection tracking, and efficiency metrics</p>
+        </div>
+        <button class="btn" id="search-refresh" style="background:var(--accent);color:#fff;padding:8px 18px;font-size:14px;">&#x21bb; Refresh</button>
       </div>
 
       <div class="stats" id="search-stats"></div>
-
-      <div class="charts">
-        <div class="chart-card">
-          <div class="chart-title">Source Breakdown</div>
-          <div id="chart-search-source" class="donut-wrap"></div>
-        </div>
-        <div class="chart-card">
-          <div class="chart-title">Top Served Entries</div>
-          <div id="chart-top-served" class="bar-chart"></div>
-        </div>
-      </div>
 
       <div class="table-wrap">
         <div class="table-header">
@@ -685,6 +701,10 @@ let allSearchHistory = [];
 let searchStats = null;
 let searchPage = 1;
 const searchPageSize = 20;
+let overviewJobs = [];
+let overviewContexts = [];
+let overviewSearchHistory = [];
+let overviewTimeWindow = 'day';
 
 // ── Navigation ────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -694,6 +714,7 @@ document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-' + currentPage).classList.add('active');
+    if (currentPage === 'overview') fetchOverviewData();
     if (currentPage === 'jobs') fetchJobs();
     if (currentPage === 'contexts') fetchContexts();
     if (currentPage === 'repos') fetchTrackedRepos();
@@ -736,10 +757,19 @@ function connectWs() {
 connectWs();
 
 // ── API Fetchers ──────────────────────────────────────────────────────
-async function fetchMetrics() {
+async function fetchOverviewData() {
   try {
-    const r = await fetch('/api/metrics');
-    metrics = await r.json();
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+    const [metricsRes, jobsRes, ctxRes, searchRes] = await Promise.all([
+      fetch('/api/metrics'),
+      fetch('/api/jobs'),
+      fetch('/api/contexts'),
+      fetch('/api/search-history?since=' + encodeURIComponent(since)),
+    ]);
+    metrics = await metricsRes.json();
+    overviewJobs = await jobsRes.json();
+    overviewContexts = await ctxRes.json();
+    overviewSearchHistory = await searchRes.json();
     renderOverview();
   } catch {}
 }
@@ -792,7 +822,7 @@ async function deleteContext(id) {
     await fetch('/api/contexts/' + encodeURIComponent(id), { method: 'DELETE' });
     closeModal();
     fetchContexts();
-    fetchMetrics();
+    fetchOverviewData();
   } catch {}
 }
 
@@ -802,55 +832,61 @@ function renderOverview() {
   const j = metrics.jobs;
   const c = metrics.contexts;
 
-  // Stats
+  // Token usage from completed jobs
+  const totalInput = overviewJobs.reduce((s, job) => s + (job.inputTokens || 0), 0);
+  const totalOutput = overviewJobs.reduce((s, job) => s + (job.outputTokens || 0), 0);
+  const totalTokens = totalInput + totalOutput;
+
+  // Stat cards
   document.getElementById('overview-stats').innerHTML = `
-    <div class="stat-card"><div class="stat-label">Total Jobs</div>
-      <div class="stat-value accent">${j.total}</div></div>
-    <div class="stat-card"><div class="stat-label">Processing</div>
-      <div class="stat-value ${j.processing > 0 ? 'yellow pulse' : ''}">${j.processing}</div></div>
-    <div class="stat-card"><div class="stat-label">Completed</div>
-      <div class="stat-value green">${j.done}</div>
-      <div class="stat-sub">${j.total > 0 ? Math.round(j.done / j.total * 100) : 0}% success rate</div></div>
-    <div class="stat-card"><div class="stat-label">Failed</div>
-      <div class="stat-value ${j.failed > 0 ? 'red' : ''}">${j.failed}</div></div>
     <div class="stat-card"><div class="stat-label">Total Contexts</div>
-      <div class="stat-value accent">${c.total}</div></div>
-    <div class="stat-card"><div class="stat-label">Projects</div>
-      <div class="stat-value">${Object.keys(c.byProject).length}</div></div>
+      <div class="stat-value accent">${c.total}</div>
+      <div class="stat-sub">${Object.keys(c.byProject).length} projects</div></div>
+    <div class="stat-card"><div class="stat-label">Active Jobs</div>
+      <div class="stat-value ${j.processing > 0 ? 'yellow pulse' : ''}">${j.processing}</div>
+      <div class="stat-sub">${j.total} total</div></div>
+    <div class="stat-card"><div class="stat-label">Search Queries</div>
+      <div class="stat-value" style="color:var(--purple)">${overviewSearchHistory.length}</div>
+      <div class="stat-sub">last 30 days</div></div>
+    <div class="stat-card"><div class="stat-label">Token Usage</div>
+      <div class="stat-value green">${formatCompact(totalTokens)}</div>
+      <div class="stat-sub">${formatCompact(totalInput)} in / ${formatCompact(totalOutput)} out</div></div>
   `;
 
-  // Job status bar chart
-  renderBarChart('chart-job-status', [
-    { label: 'Pending', value: j.pending, color: 'var(--yellow)' },
-    { label: 'Processing', value: j.processing, color: 'var(--accent)' },
-    { label: 'Done', value: j.done, color: 'var(--green)' },
-    { label: 'Failed', value: j.failed, color: 'var(--red)' },
-  ]);
+  // Line charts
+  renderOverviewCharts();
 
-  // Scope donut
-  renderDonut('chart-scope', c.byScope);
-
-  // Project bar chart
+  // Top Projects bar chart (kept)
   const projEntries = Object.entries(c.byProject).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const colors = ['var(--accent)', 'var(--purple)', 'var(--green)', 'var(--yellow)',
     'var(--orange)', 'var(--red)', '#58a6ff', '#bc8cff'];
   renderBarChart('chart-projects',
     projEntries.map(([name, count], i) => ({ label: name, value: count, color: colors[i % colors.length] }))
   );
+}
 
-  // Activity sparkline
-  renderActivity('chart-activity', metrics.recentJobs);
+function renderOverviewCharts() {
+  const w = overviewTimeWindow;
 
-  // Recent jobs table
-  const tbody = document.getElementById('overview-recent-jobs');
-  tbody.innerHTML = (metrics.recentJobs || []).slice(0, 8).map(j => `
-    <tr>
-      <td><span class="badge badge-${j.status}">${j.status}</span></td>
-      <td class="mono">${esc(j.type)}</td>
-      <td>${esc(j.project || '—')}</td>
-      <td class="mono text-dim">${timeAgo(j.createdAt)}</td>
-    </tr>
-  `).join('');
+  // Jobs over time
+  const jobTimestamps = overviewJobs.map(j => j.createdAt).filter(Boolean);
+  renderLineChart('chart-jobs-timeline', [
+    { name: 'Jobs', color: 'var(--accent)', data: bucketByTime(jobTimestamps, w) }
+  ]);
+
+  // Contexts created vs updated
+  const createTimestamps = overviewContexts.map(c => c.created).filter(Boolean);
+  const updateTimestamps = overviewContexts.map(c => c.updated).filter(Boolean);
+  renderLineChart('chart-contexts-timeline', [
+    { name: 'Created', color: 'var(--green)', data: bucketByTime(createTimestamps, w) },
+    { name: 'Updated', color: 'var(--purple)', data: bucketByTime(updateTimestamps, w) },
+  ]);
+
+  // Search queries over time
+  const searchTimestamps = overviewSearchHistory.map(r => r.timestamp).filter(Boolean);
+  renderLineChart('chart-search-timeline', [
+    { name: 'Queries', color: 'var(--purple)', data: bucketByTime(searchTimestamps, w) }
+  ]);
 }
 
 // ── Render: Jobs ──────────────────────────────────────────────────────
@@ -870,7 +906,7 @@ function renderJobs() {
   const page = filtered.slice(start, end);
 
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
   } else {
     tbody.innerHTML = page.map((j, i) => {
       const idx = start + i;
@@ -893,10 +929,11 @@ function renderJobs() {
         '<td>' + statusHtml + '</td>' +
         '<td class="mono">' + esc(j.type || '\u2014') + typeExtra + '</td>' +
         '<td>' + esc(j.project || '\u2014') + '</td>' +
+        '<td class="mono text-dim">' + (j.transcriptTokens != null ? formatCompact(j.transcriptTokens) + ' tokens' : '\u2014') + '</td>' +
         '<td class="mono text-dim" title="' + esc(new Date(j.createdAt).toLocaleString()) + '">' + timeAgo(j.createdAt) + '</td>' +
       '</tr>' +
       '<tr class="job-detail-row" id="job-detail-' + idx + '" style="display:none;">' +
-        '<td colspan="5" class="job-detail-cell"><div class="job-detail">' + renderJobDetail(j) + '</div></td>' +
+        '<td colspan="6" class="job-detail-cell"><div class="job-detail">' + renderJobDetail(j) + '</div></td>' +
       '</tr>';
     }).join('');
   }
@@ -1754,6 +1791,165 @@ function renderActivity(elId, recentJobs) {
   <div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:var(--font);">${vals.length} active hours</div>`;
 }
 
+// ── Time bucketing ────────────────────────────────────────────────────
+function bucketByTime(timestamps, window) {
+  const now = Date.now();
+  let cutoff, keys, bucketFn, labelFn;
+
+  if (window === 'day') {
+    cutoff = now - 24 * 3600000;
+    keys = [];
+    for (let i = 23; i >= 0; i--) {
+      keys.push(new Date(now - i * 3600000).toISOString().slice(0, 13));
+    }
+    bucketFn = (ts) => new Date(ts).toISOString().slice(0, 13);
+    labelFn = (k) => k.slice(11, 13) + ':00';
+  } else if (window === 'week') {
+    cutoff = now - 7 * 86400000;
+    keys = [];
+    for (let i = 6; i >= 0; i--) {
+      keys.push(new Date(now - i * 86400000).toISOString().slice(0, 10));
+    }
+    bucketFn = (ts) => new Date(ts).toISOString().slice(0, 10);
+    labelFn = (k) => new Date(k + 'T12:00:00').toLocaleDateString('en', { weekday: 'short' });
+  } else {
+    cutoff = now - 30 * 86400000;
+    keys = [];
+    for (let i = 29; i >= 0; i--) {
+      keys.push(new Date(now - i * 86400000).toISOString().slice(0, 10));
+    }
+    bucketFn = (ts) => new Date(ts).toISOString().slice(0, 10);
+    labelFn = (k) => k.slice(5);
+  }
+
+  const counts = {};
+  keys.forEach(k => counts[k] = 0);
+  timestamps.forEach(ts => {
+    if (new Date(ts).getTime() >= cutoff) {
+      const key = bucketFn(ts);
+      if (key in counts) counts[key]++;
+    }
+  });
+  return keys.map(k => ({ label: labelFn(k), value: counts[k] }));
+}
+
+// ── Line chart renderer ──────────────────────────────────────────────
+function niceStep(max, targetTicks) {
+  const rough = max / targetTicks;
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / pow;
+  let step;
+  if (norm <= 1) step = 1;
+  else if (norm <= 2) step = 2;
+  else if (norm <= 5) step = 5;
+  else step = 10;
+  return Math.max(1, step * pow);
+}
+
+function renderLineChart(elId, series) {
+  const el = document.getElementById(elId);
+  if (!series || series.length === 0 || !series[0].data || series[0].data.length === 0) {
+    el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:12px;">No data</div>';
+    return;
+  }
+
+  const allVals = series.flatMap(s => s.data.map(d => d.value));
+  const maxVal = Math.max(...allVals, 1);
+  const allZero = allVals.every(v => v === 0);
+
+  if (allZero) {
+    el.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text3);font-size:12px;">No activity in this time window</div>';
+    return;
+  }
+
+  const W = 560;
+  const H = 170;
+  const PAD = { top: 12, right: 16, bottom: 28, left: 44 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+  const dataLen = series[0].data.length;
+
+  const xScale = (i) => PAD.left + (i / Math.max(dataLen - 1, 1)) * plotW;
+  const yScale = (v) => PAD.top + plotH - (v / maxVal) * plotH;
+
+  // Y-axis grid
+  const step = niceStep(maxVal, 4);
+  const yTicks = [];
+  for (let v = 0; v <= maxVal + step * 0.1; v += step) yTicks.push(Math.round(v));
+  const gridLines = yTicks.map(v =>
+    '<line x1="' + PAD.left + '" y1="' + yScale(v) + '" x2="' + (W - PAD.right) + '" y2="' + yScale(v) + '" stroke="var(--border)" stroke-dasharray="3,3"/>' +
+    '<text x="' + (PAD.left - 6) + '" y="' + (yScale(v) + 3) + '" text-anchor="end" fill="var(--text3)" font-size="10" font-family="var(--font)">' + formatCompact(v) + '</text>'
+  ).join('');
+
+  // X-axis labels
+  const labelEvery = Math.max(1, Math.floor(dataLen / 7));
+  const xLabels = series[0].data.map((d, i) => {
+    if (i % labelEvery !== 0 && i !== dataLen - 1) return '';
+    return '<text x="' + xScale(i) + '" y="' + (H - 4) + '" text-anchor="middle" fill="var(--text3)" font-size="10" font-family="var(--font)">' + esc(d.label) + '</text>';
+  }).join('');
+
+  // Lines + area fill
+  const linesSvg = series.map(s => {
+    const points = s.data.map((d, i) => xScale(i) + ',' + yScale(d.value)).join(' ');
+    const areaPoints = xScale(0) + ',' + yScale(0) + ' ' + points + ' ' + xScale(dataLen - 1) + ',' + yScale(0);
+    return '<polygon points="' + areaPoints + '" fill="' + s.color + '" opacity="0.07"/>' +
+      '<polyline points="' + points + '" fill="none" stroke="' + s.color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+  }).join('');
+
+  // Hit areas for tooltip
+  const colW = plotW / Math.max(dataLen, 1);
+  const hitAreas = series[0].data.map((d, i) => {
+    const x = xScale(i);
+    const values = series.map(s => s.name + ': ' + s.data[i].value).join(' / ');
+    return '<rect x="' + (x - colW / 2) + '" y="' + PAD.top + '" width="' + colW + '" height="' + plotH + '" fill="transparent" data-idx="' + i + '" data-label="' + esc(d.label) + '" data-values="' + esc(values) + '"/>';
+  }).join('');
+
+  // Dots at data points
+  const dotsSvg = series.map(s =>
+    s.data.map((d, i) =>
+      '<circle cx="' + xScale(i) + '" cy="' + yScale(d.value) + '" r="0" fill="' + s.color + '" data-dot="' + i + '" style="transition:r 0.1s"/>'
+    ).join('')
+  ).join('');
+
+  const svgId = elId + '-svg';
+  el.innerHTML =
+    '<svg id="' + svgId + '" viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid meet" style="width:100%;height:' + H + 'px">' +
+      gridLines + xLabels + linesSvg + dotsSvg +
+      '<line id="' + svgId + '-hover" x1="0" y1="' + PAD.top + '" x2="0" y2="' + (PAD.top + plotH) + '" stroke="var(--text3)" stroke-dasharray="2,2" opacity="0"/>' +
+      hitAreas +
+    '</svg>' +
+    '<div class="line-chart-tooltip" id="' + svgId + '-tooltip"></div>';
+
+  // Tooltip interactivity
+  const svg = document.getElementById(svgId);
+  const tooltip = document.getElementById(svgId + '-tooltip');
+  const hoverLine = document.getElementById(svgId + '-hover');
+
+  svg.querySelectorAll('rect[data-idx]').forEach(rect => {
+    rect.addEventListener('mouseenter', () => {
+      const idx = parseInt(rect.dataset.idx);
+      const x = xScale(idx);
+      hoverLine.setAttribute('x1', x);
+      hoverLine.setAttribute('x2', x);
+      hoverLine.setAttribute('opacity', '1');
+      tooltip.textContent = rect.dataset.label + ' \u2014 ' + rect.dataset.values;
+      tooltip.classList.add('visible');
+      const svgRect = svg.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const ratio = svgRect.width / W;
+      tooltip.style.left = Math.min((x * ratio), elRect.width - 140) + 'px';
+      tooltip.style.top = '0px';
+      svg.querySelectorAll('circle[data-dot="' + idx + '"]').forEach(dot => dot.setAttribute('r', '3.5'));
+    });
+    rect.addEventListener('mouseleave', () => {
+      const idx = rect.dataset.idx;
+      hoverLine.setAttribute('opacity', '0');
+      tooltip.classList.remove('visible');
+      svg.querySelectorAll('circle[data-dot="' + idx + '"]').forEach(dot => dot.setAttribute('r', '0'));
+    });
+  });
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────
 function esc(str) {
   if (!str) return '';
@@ -1770,6 +1966,16 @@ function timeAgo(iso) {
   if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
   return Math.floor(diff / 86400000) + 'd ago';
 }
+
+// ── Time toggle listener ──────────────────────────────────────────────
+document.querySelectorAll('#overview-time-toggle .time-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#overview-time-toggle .time-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    overviewTimeWindow = btn.dataset.window;
+    renderOverviewCharts();
+  });
+});
 
 // ── Filter listeners ──────────────────────────────────────────────────
 ['job-status-filter', 'job-project-filter'].forEach(id =>
@@ -1835,55 +2041,7 @@ function renderSearchStats() {
 }
 
 function renderSearchCharts() {
-  if (!searchStats) return;
-  const s = searchStats;
-
-  // Source breakdown donut
-  const bySource = {
-    inject: s.bySource.inject || 0,
-    cli: s.bySource.cli || 0,
-    api: s.bySource.api || 0,
-  };
-  const srcEl = document.getElementById('chart-search-source');
-  const total = bySource.inject + bySource.cli + bySource.api;
-  if (total === 0) {
-    srcEl.innerHTML = '<div style="color:var(--text2);text-align:center;padding:40px;">No data yet</div>';
-  } else {
-    // Reuse donut pattern
-    const segments = [
-      { label: 'inject', value: bySource.inject, color: 'var(--purple)' },
-      { label: 'cli', value: bySource.cli, color: 'var(--accent)' },
-      { label: 'api', value: bySource.api, color: 'var(--green)' },
-    ].filter(s => s.value > 0);
-    let offset = 0;
-    const circles = segments.map(seg => {
-      const pct = seg.value / total * 100;
-      const c = `<circle cx="50" cy="50" r="40" fill="none" stroke="${seg.color}" stroke-width="20" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${-offset}" transform="rotate(-90 50 50)"/>`;
-      offset += pct;
-      return c;
-    });
-    const legend = segments.map(seg => `<span class="legend-item"><span class="legend-dot" style="background:${seg.color}"></span>${seg.label}: ${seg.value}</span>`).join('');
-    srcEl.innerHTML = `<svg viewBox="0 0 100 100" width="140" height="140">${circles.join('')}</svg><div class="donut-legend">${legend}</div>`;
-  }
-
-  // Top served entries bar chart
-  const barEl = document.getElementById('chart-top-served');
-  if (s.topServedEntries.length === 0) {
-    barEl.innerHTML = '<div style="color:var(--text2);text-align:center;padding:40px;">No data yet</div>';
-  } else {
-    const maxCount = Math.max(...s.topServedEntries.map(e => e.count));
-    barEl.innerHTML = s.topServedEntries.slice(0, 8).map(e => {
-      const pct = maxCount > 0 ? (e.count / maxCount * 100) : 0;
-      const shortTitle = e.title.length > 35 ? e.title.slice(0, 35) + '...' : e.title;
-      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-        <div style="flex:1;min-width:0;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(e.title)}">${esc(shortTitle)}</div>
-        <div style="width:120px;height:14px;background:var(--bg);border-radius:3px;overflow:hidden;flex-shrink:0;">
-          <div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px;"></div>
-        </div>
-        <div style="width:24px;text-align:right;font-size:11px;color:var(--text2);flex-shrink:0;">${e.count}</div>
-      </div>`;
-    }).join('');
-  }
+  // Charts removed — kept as no-op so call sites don't break
 }
 
 function renderSearchHistory() {
@@ -1961,7 +2119,7 @@ origNavHandler.forEach(item => {
 });
 
 // ── Init ──────────────────────────────────────────────────────────────
-fetchMetrics();
+fetchOverviewData();
 fetchProjects();
 </script>
 </body>

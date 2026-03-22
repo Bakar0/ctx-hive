@@ -22,8 +22,28 @@ async function getGlobalHooksPath(): Promise<string | null> {
 }
 
 async function resolveCtxHiveBin(): Promise<string> {
-  // Use the currently running binary's path
-  return process.argv[0] ?? "ctx-hive";
+  const argv0 = process.argv[0] ?? "";
+  const basename = argv0.split("/").pop() ?? "";
+
+  // 1. Already running as compiled ctx-hive binary
+  if (basename === "ctx-hive") return argv0;
+
+  // 2. Check deployed binary at ~/.local/bin/ctx-hive
+  const deployedBin = join(process.env["HOME"] ?? "", ".local", "bin", "ctx-hive");
+  if (await Bun.file(deployedBin).exists()) return deployedBin;
+
+  // 3. Check if ctx-hive is in PATH
+  try {
+    const proc = Bun.spawn(["which", "ctx-hive"], { stdout: "pipe", stderr: "pipe" });
+    const path = (await new Response(proc.stdout).text()).trim();
+    if ((await proc.exited) === 0 && path) return path;
+  } catch { /* ignore */ }
+
+  // 4. Dev fallback: bun run <entry-point>
+  const entryPoint = process.argv[1];
+  if (argv0 !== "" && entryPoint != null && entryPoint !== "") return `${argv0} run ${entryPoint}`;
+
+  return "ctx-hive";
 }
 
 export async function installGitHooks(args: string[]): Promise<void> {
@@ -34,7 +54,7 @@ export async function installGitHooks(args: string[]): Promise<void> {
 
   // 2. Check existing core.hooksPath
   const currentPath = await getGlobalHooksPath();
-  if (currentPath === GIT_HOOKS_DIR) {
+  if (currentPath === GIT_HOOKS_DIR && !force) {
     console.log("Git hooks are already installed.");
     console.log(`  Hooks dir: ${GIT_HOOKS_DIR}`);
     return;

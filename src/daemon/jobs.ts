@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, readFile } from "node:fs/promises";
+import { mkdir, readdir, rename } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { z } from "zod";
 import { hiveRoot } from "../ctx/store.ts";
@@ -66,6 +66,9 @@ export type Job = z.infer<typeof JobSchema>;
 
 const RawJobRecord = z.record(z.string(), z.unknown());
 
+export const JOB_STATUSES = ["pending", "processing", "done", "failed"] as const;
+export type JobStatus = typeof JOB_STATUSES[number];
+
 export interface JobResult {
   success: boolean;
   error?: string;
@@ -75,6 +78,23 @@ export interface JobResult {
   inputTokens?: number;
   outputTokens?: number;
 }
+
+export const RawJobFileSchema = z.object({
+  type: z.string().optional(),
+  createdAt: z.string().optional(),
+  sessionId: z.string().optional(),
+  cwd: z.string().optional(),
+  reason: z.string().optional(),
+  _error: z.string().optional(),
+  _failedAt: z.string().optional(),
+  _startedAt: z.string().optional(),
+  _completedAt: z.string().optional(),
+  _duration_ms: z.number().optional(),
+  _transcriptTokens: z.number().optional(),
+  _entriesCreated: z.number().optional(),
+  _inputTokens: z.number().optional(),
+  _outputTokens: z.number().optional(),
+}).passthrough();
 
 // ── Directory setup ───────────────────────────────────────────────────
 
@@ -90,7 +110,7 @@ export async function ensureJobDirs(): Promise<void> {
 // ── Job file I/O ──────────────────────────────────────────────────────
 
 export async function readJob(path: string): Promise<Job> {
-  const raw = await readFile(path, "utf-8");
+  const raw = await Bun.file(path).text();
   return JobSchema.parse(JSON.parse(raw));
 }
 
@@ -119,51 +139,45 @@ export async function listJobs(dir: string): Promise<string[]> {
 }
 
 /**
- * Check if a session has already been processed (exists in done/).
+ * Search done/ for any job matching a predicate.
  */
-export async function isDuplicate(sessionId: string): Promise<boolean> {
+async function findInDone(predicate: (job: Job) => boolean): Promise<boolean> {
   const doneFiles = await listJobs(DONE_DIR);
   for (const path of doneFiles) {
     try {
       const job = await readJob(path);
-      if (job.type === "session-mine" && job.sessionId === sessionId) {
-        return true;
-      }
+      if (predicate(job)) return true;
     } catch {
       // skip malformed
     }
   }
   return false;
+}
+
+/**
+ * Check if a session has already been processed (exists in done/).
+ */
+export async function isDuplicate(sessionId: string): Promise<boolean> {
+  return findInDone((job) => job.type === "session-mine" && job.sessionId === sessionId);
 }
 
 /**
  * Check if a git job with the same HEAD SHA + repo was already processed (exists in done/).
  */
 export async function isGitJobProcessed(headSha: string, repoPath: string): Promise<boolean> {
-  const doneFiles = await listJobs(DONE_DIR);
-
-  for (const path of doneFiles) {
-    try {
-      const job = await readJob(path);
-      if (
-        (job.type === "git-push" || job.type === "git-pull") &&
-        job.headSha === headSha &&
-        job.repoPath === repoPath
-      ) {
-        return true;
-      }
-    } catch {
-      // skip malformed
-    }
-  }
-  return false;
+  return findInDone(
+    (job) =>
+      (job.type === "git-push" || job.type === "git-pull") &&
+      job.headSha === headSha &&
+      job.repoPath === repoPath,
+  );
 }
 
 /**
  * Stamp _startedAt on a job file (for live elapsed tracking).
  */
 export async function stampStarted(jobPath: string): Promise<void> {
-  const raw = await readFile(jobPath, "utf-8");
+  const raw = await Bun.file(jobPath).text();
   const job = RawJobRecord.parse(JSON.parse(raw));
   job._startedAt = new Date().toISOString();
   await Bun.write(jobPath, JSON.stringify(job, null, 2));
@@ -173,7 +187,7 @@ export async function stampStarted(jobPath: string): Promise<void> {
  * Write completion metadata and move to done/.
  */
 export async function completeJob(jobPath: string, result: JobResult): Promise<string> {
-  const raw = await readFile(jobPath, "utf-8");
+  const raw = await Bun.file(jobPath).text();
   const job = RawJobRecord.parse(JSON.parse(raw));
   job._completedAt = new Date().toISOString();
   job._duration_ms = result.duration_ms;
@@ -189,10 +203,31 @@ export async function completeJob(jobPath: string, result: JobResult): Promise<s
  * Mark a failed job by appending error info and moving to failed/.
  */
 export async function failJob(jobPath: string, error: string): Promise<string> {
-  const raw = await readFile(jobPath, "utf-8");
+  const raw = await Bun.file(jobPath).text();
   const job = RawJobRecord.parse(JSON.parse(raw));
   job._error = error;
   job._failedAt = new Date().toISOString();
   await Bun.write(jobPath, JSON.stringify(job, null, 2));
   return moveJob(jobPath, FAILED_DIR);
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+export function jobTimestamp(): string {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * Enqueue a repo-sync job for the given repo path.
+ */
+export async function enqueueRepoSync(repoPath: string): Promise<void> {
+  await ensureJobDirs();
+  const repoName = basename(repoPath);
+  const syncJob: RepoSyncJob = {
+    type: "repo-sync",
+    repoPath,
+    cwd: repoPath,
+    createdAt: new Date().toISOString(),
+  };
+  await writeJob(PENDING_DIR, syncJob, `${jobTimestamp()}-sync-${repoName}.json`);
 }

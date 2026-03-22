@@ -1,10 +1,10 @@
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { mkdir, chmod, rm } from "node:fs/promises";
+import { hiveRoot } from "../ctx/store.ts";
 import { ensureJobDirs } from "../daemon/jobs.ts";
-import { HOOK_SCRIPTS, embedBinaryPath, type GitHookName } from "./git-scripts.ts";
+import { HOOK_SCRIPTS, HOOK_NAMES, embedBinaryPath, type GitHookName } from "./git-scripts.ts";
 
-const GIT_HOOKS_DIR = join(homedir(), ".ctx-hive", "git-hooks");
+const GIT_HOOKS_DIR = join(hiveRoot(), "git-hooks");
 
 async function getGlobalHooksPath(): Promise<string | null> {
   try {
@@ -125,12 +125,11 @@ export async function checkGitHooksInstalled(): Promise<{
   missing: GitHookName[];
 }> {
   const hooksPath = await getGlobalHooksPath();
+  const hookNames = HOOK_NAMES;
   if (hooksPath !== GIT_HOOKS_DIR) {
-    const allHooks: GitHookName[] = ["pre-push", "post-merge", "post-rewrite"];
-    return { installed: false, hooksPath, missing: allHooks };
+    return { installed: false, hooksPath, missing: hookNames };
   }
 
-  const hookNames: GitHookName[] = ["pre-push", "post-merge", "post-rewrite"];
   const missing: GitHookName[] = [];
   for (const hookName of hookNames) {
     const hookFile = Bun.file(join(GIT_HOOKS_DIR, hookName));

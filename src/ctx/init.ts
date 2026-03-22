@@ -3,6 +3,7 @@ import { join, relative, basename, resolve } from "node:path";
 import { loadIndex, type IndexEntry } from "./store.ts";
 import { getSessionFilePaths } from "./sessions.ts";
 import { runParallel, type PipelineTask } from "../adapter/pipeline.ts";
+import { errorMessage } from "../git/run.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -23,17 +24,7 @@ export interface RepoContext {
   claudeMd: string;
 }
 
-// ── Arg parsing ────────────────────────────────────────────────────────
-
-function getFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  return args[idx + 1];
-}
-
-function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag);
-}
+import { getFlag, hasFlag } from "../cli/args.ts";
 
 // ── Repo scanning ──────────────────────────────────────────────────────
 
@@ -319,8 +310,9 @@ export async function gatherRepoContext(repoPath: string): Promise<RepoContext> 
 
 export async function checkExistingContext(
   projectName: string,
+  preloadedIndex?: IndexEntry[],
 ): Promise<IndexEntry[]> {
-  const index = await loadIndex();
+  const index = preloadedIndex ?? await loadIndex();
   return index.filter(
     (e) =>
       e.project === projectName ||
@@ -330,8 +322,11 @@ export async function checkExistingContext(
 
 // ── Project Overview lookup ────────────────────────────────────────────
 
-export async function findProjectOverview(projectName: string): Promise<IndexEntry | null> {
-  const index = await loadIndex();
+export async function findProjectOverview(
+  projectName: string,
+  preloadedIndex?: IndexEntry[],
+): Promise<IndexEntry | null> {
+  const index = preloadedIndex ?? await loadIndex();
   return (
     index.find(
       (e) => e.project === projectName && e.tags.includes("project-overview"),
@@ -671,10 +666,11 @@ async function processRepo(
     console.log(`  CLAUDE.md: ${repoContext.claudeMd !== "" ? "found" : "none"}`);
   }
 
-  // 3. Check existing context
-  const existing = await checkExistingContext(meta.name);
+  // 3. Check existing context (load index once)
+  const index = await loadIndex();
+  const existing = await checkExistingContext(meta.name, index);
   const isUpdate = existing.length > 0;
-  const overviewEntry = await findProjectOverview(meta.name);
+  const overviewEntry = await findProjectOverview(meta.name, index);
   if (verbose) console.log(`  Existing entries: ${existing.length} (${isUpdate ? "update" : "init"} mode), overview: ${overviewEntry ? overviewEntry.id : "none"}`);
 
   // 4. Discover session files
@@ -761,7 +757,7 @@ async function processRepo(
       errors,
     };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     console.error(`  ✗ ${repo.name}: ${msg}`);
     return { repoName: repo.name, cost_usd: 0, duration_ms: 0, errors: [msg] };
   }

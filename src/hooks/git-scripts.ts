@@ -88,6 +88,8 @@ export const HOOK_SCRIPTS = {
 
 export type GitHookName = keyof typeof HOOK_SCRIPTS;
 
+export const HOOK_NAMES: GitHookName[] = ["pre-push", "post-merge", "post-rewrite"];
+
 /**
  * Replace the CTX_HIVE_BIN placeholder with the actual binary path.
  */

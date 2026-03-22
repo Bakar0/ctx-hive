@@ -1,4 +1,5 @@
 import { spawnClaude, type SpawnClaudeOptions } from "./claude.ts";
+import { errorMessage } from "../git/run.ts";
 
 export interface PipelineTask<T> {
   name: string;
@@ -63,7 +64,7 @@ export async function runParallel<T>(tasks: PipelineTask<T>[]): Promise<PhaseSum
         return {
           name: task.name,
           logPath: instance.logPath,
-          error: `Agent '${task.name}' failed: ${err instanceof Error ? err.message : String(err)}`,
+          error: `Agent '${task.name}' failed: ${errorMessage(err)}`,
           cost_usd: 0,
           duration_ms: 0,
         } satisfies PipelineResult<T>;

@@ -209,6 +209,11 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
     border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+
+  /* ── Pagination ──────────────────────────────────────────────── */
+  .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 0; }
+  .pagination-info { font-size: 12px; color: var(--text2); font-family: var(--font); }
+  .pagination .btn:disabled { opacity: 0.35; cursor: default; }
 </style>
 </head>
 <body>
@@ -311,9 +316,15 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Status</th><th>Project</th><th>Transcript</th><th>Duration</th><th>Stats</th><th>Created</th></tr></thead>
+          <thead><tr><th>Status</th><th>Type</th><th>Project</th><th>Transcript</th><th>Duration</th><th>Stats</th><th>Created</th></tr></thead>
           <tbody id="jobs-tbody"></tbody>
         </table>
+      </div>
+
+      <div class="pagination" id="jobs-pagination">
+        <button class="btn" id="jobs-prev" disabled>&larr; Prev</button>
+        <span class="pagination-info" id="jobs-page-info"></span>
+        <button class="btn" id="jobs-next" disabled>Next &rarr;</button>
       </div>
     </div>
 
@@ -426,6 +437,8 @@ let scanLoading = false;
 let syncingRepos = new Set();
 let currentPage = 'overview';
 let selectedContext = null;
+let jobsPage = 1;
+const jobsPageSize = 20;
 
 // ── Navigation ────────────────────────────────────────────────────────
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -601,20 +614,34 @@ function renderJobs() {
   if (projectF) filtered = filtered.filter(j => j.project === projectF);
 
   const tbody = document.getElementById('jobs-tbody');
+  const totalPages = Math.max(1, Math.ceil(filtered.length / jobsPageSize));
+  if (jobsPage > totalPages) jobsPage = totalPages;
+  const start = (jobsPage - 1) * jobsPageSize;
+  const end = start + jobsPageSize;
+  const page = filtered.slice(start, end);
+
   if (filtered.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
-    return;
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:32px;">No jobs found</td></tr>';
+  } else {
+    tbody.innerHTML = page.map(j => `
+      <tr>
+        <td><span class="badge badge-${j.status}">${j.status}</span></td>
+        <td>${esc(j.type || '—')}</td>
+        <td>${esc(j.project || '—')}</td>
+        <td class="mono text-dim">${j.transcriptTokens != null ? '~' + formatCompact(j.transcriptTokens) + ' tokens' : '—'}</td>
+        <td class="mono">${renderDuration(j)}</td>
+        <td>${renderStats(j)}</td>
+        <td class="mono text-dim">${timeAgo(j.createdAt)}</td>
+      </tr>
+    `).join('');
   }
-  tbody.innerHTML = filtered.map(j => `
-    <tr>
-      <td><span class="badge badge-${j.status}">${j.status}</span></td>
-      <td>${esc(j.project || '—')}</td>
-      <td class="mono text-dim">${j.transcriptTokens != null ? '~' + formatCompact(j.transcriptTokens) + ' tokens' : '—'}</td>
-      <td class="mono">${renderDuration(j)}</td>
-      <td>${renderStats(j)}</td>
-      <td class="mono text-dim">${timeAgo(j.createdAt)}</td>
-    </tr>
-  `).join('');
+
+  // Update pagination controls
+  document.getElementById('jobs-prev').disabled = jobsPage <= 1;
+  document.getElementById('jobs-next').disabled = jobsPage >= totalPages;
+  document.getElementById('jobs-page-info').textContent = filtered.length === 0
+    ? '0 jobs'
+    : (start + 1) + '–' + Math.min(end, filtered.length) + ' of ' + filtered.length;
 }
 
 function renderDuration(j) {
@@ -792,11 +819,13 @@ function renderRepos() {
   if (filterVal === 'tracked') repos = repos.filter(r => r.tracked);
   if (filterVal === 'untracked') repos = repos.filter(r => !r.tracked);
 
-  // Sort: tracked first, then by name
+  // Sort: tracked first, then by folder last-modified (most recent first)
   repos.sort((a, b) => {
     if (a.tracked && !b.tracked) return -1;
     if (!a.tracked && b.tracked) return 1;
-    return (a.name || '').localeCompare(b.name || '');
+    const aTime = a.lastModifiedAt ? new Date(a.lastModifiedAt).getTime() : 0;
+    const bTime = b.lastModifiedAt ? new Date(b.lastModifiedAt).getTime() : 0;
+    return bTime - aTime;
   });
 
   const trackedCount = allRepos.filter(r => r.tracked).length;
@@ -971,8 +1000,10 @@ function timeAgo(iso) {
 
 // ── Filter listeners ──────────────────────────────────────────────────
 ['job-status-filter', 'job-project-filter'].forEach(id =>
-  document.getElementById(id).addEventListener('change', renderJobs)
+  document.getElementById(id).addEventListener('change', () => { jobsPage = 1; renderJobs(); })
 );
+document.getElementById('jobs-prev').addEventListener('click', () => { jobsPage--; renderJobs(); });
+document.getElementById('jobs-next').addEventListener('click', () => { jobsPage++; renderJobs(); });
 ['ctx-scope-filter', 'ctx-project-filter', 'ctx-sort'].forEach(id =>
   document.getElementById(id).addEventListener('change', fetchContexts)
 );

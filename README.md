@@ -39,19 +39,24 @@ This registers ctx-hive as a skill so Claude automatically searches your context
 ctx-hive <command> [options]
 
 Commands:
-  search <query>       Search entries by keyword
-  add                  Create a new context entry
-  list                 List all entries
-  show <id>            Display a full entry
-  edit <id>            Open an entry in $EDITOR
-  delete <id>          Remove an entry
-  init                 Scan repos and mine Claude sessions for context
-  update               Update existing entries (alias for init)
-  rebuild-index        Regenerate the search index
-  install-skill        Install the Claude Code skill
+  search <query>         Search entries by keyword
+  add                    Create a new context entry
+  list                   List all entries
+  show <id>              Display a full entry
+  edit <id>              Open an entry in $EDITOR
+  delete <id>            Remove an entry
+  init [path]            Scan repos and mine Claude sessions for context
+  update [path]          Update existing entries (alias for init)
+  rebuild-index          Regenerate the search index
+  serve                  Start the background daemon and dashboard
+  enqueue <job-type>     Enqueue a job for the daemon
+  install-skill          Install the Claude Code skill
+  install-hook           Install SessionEnd hook into Claude settings
+  install-git-hooks      Install global git hooks (pre-push, post-merge, post-rewrite)
+  uninstall-git-hooks    Remove global git hooks
 
 Options:
-  -v, --version        Show version
+  -v, --version          Show version
 ```
 
 ### Search
@@ -76,6 +81,40 @@ Scans your directory tree for git repos, lets you select which ones to analyze, 
 
 Results are saved as searchable context entries.
 
+### Daemon & Dashboard
+
+```bash
+ctx-hive serve                     # Start daemon + dashboard
+ctx-hive serve --port 4000         # Custom dashboard port
+ctx-hive serve --verbose           # Detailed logging
+```
+
+The daemon watches `~/.ctx-hive/jobs/pending/` and processes jobs in the background. A web dashboard is served at `http://localhost:3939` with live WebSocket updates.
+
+**Job types:** `session-mine`, `git-push`, `git-pull`, `repo-sync`
+
+**Job lifecycle:** `pending/` -> `processing/` -> `done/` or `failed/`
+
+Only one daemon instance runs at a time (PID file lock).
+
+### Hooks
+
+**Session hook** — automatically enqueues a `session-mine` job when a Claude Code session ends:
+
+```bash
+ctx-hive install-hook
+```
+
+**Git hooks** — enqueue jobs on push/pull events across all repos:
+
+```bash
+ctx-hive install-git-hooks           # Install pre-push, post-merge, post-rewrite
+ctx-hive uninstall-git-hooks         # Remove hooks
+ctx-hive uninstall-git-hooks --clean # Remove hooks + delete scripts
+```
+
+Git hooks are fire-and-forget — they never block git operations.
+
 ## Entry scopes
 
 | Scope | Purpose |
@@ -92,13 +131,16 @@ Entries are stored as Markdown files with YAML frontmatter under `~/.ctx-hive/`,
 
 ```
 src/
-├── adapter/       Claude CLI subprocess adapter
-├── ctx/           Core logic — commands, search, store, init, sessions
-├── shared/        Path utilities
-├── skills/        Claude Code skill definition
-├── types/         TypeScript declarations
-├── utils/         Logging, pipeline, skill installer
-└── index.ts       Entry point
+├── adapter/    Claude CLI subprocess adapter (spawn, stream-parse, pipeline)
+├── cli/        CLI argument parsing
+├── ctx/        Core logic — commands, search, store, init, sessions
+├── daemon/     Background daemon — serve, job queue, handlers, REST API, WebSocket, dashboard
+├── git/        Git subprocess execution
+├── hooks/      Git & session hooks — enqueue, installers, hook scripts
+├── repo/       Repo scanning & tracking
+├── skills/     Claude Code skill definition & installer
+├── types/      TypeScript declarations
+└── index.ts    Entry point
 ```
 
 - **Commands** (`src/ctx/commands.ts`) — CLI dispatcher routing to handler functions
@@ -106,6 +148,10 @@ src/
 - **Search** (`src/ctx/search.ts`) — Full-text search with token-based weighted ranking
 - **Init** (`src/ctx/init.ts`) — Repo scanning and parallel agent execution
 - **Sessions** (`src/ctx/sessions.ts`) — Claude session file discovery
+- **Daemon** (`src/daemon/serve.ts`) — Background job processor with HTTP dashboard
+- **Jobs** (`src/daemon/jobs.ts`) — File-based job queue with zod-validated schemas
+- **Hooks** (`src/hooks/`) — SessionEnd hook and global git hook installers
+- **Repo tracking** (`src/repo/tracking.ts`) — Track/untrack repos for context generation
 
 ## Requirements
 
@@ -115,11 +161,14 @@ src/
 ## Development
 
 ```bash
-bun install          # Install dependencies
-bun run dev          # Run from source
-bun test             # Run tests
-bun run typecheck    # Type check
-bun run build        # Compile to standalone binary
+bun install              # Install dependencies
+bun run dev              # Run from source
+bun test                 # Run tests
+bun run lint             # Lint with oxlint (type-aware)
+bun run typecheck        # Type check
+bun run build            # Compile to standalone binary
+bun run build:linux-x64  # Cross-compile for Linux x64
+bun run deploy           # Build + copy to ~/.local/bin/
 ```
 
 ## License

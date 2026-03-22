@@ -21,6 +21,7 @@ export interface DiscoveredRepo {
   currentBranch: string;
   behindCount: number;
   defaultBranch: string;
+  lastModifiedAt?: string;
   exists: boolean;
 }
 
@@ -92,9 +93,10 @@ export async function discoverRepos(
   // Enrich in parallel
   const results = await Promise.all(
     scanned.map(async (repo): Promise<DiscoveredRepo> => {
-      const [meta, branchInfo] = await Promise.all([
+      const [meta, branchInfo, gitStat] = await Promise.all([
         resolveRepoMeta(repo.absPath),
         getRepoBranchInfo(repo.absPath),
+        stat(resolve(repo.absPath, ".git")).catch(() => null),
       ]);
 
       const t = trackedMap.get(repo.absPath);
@@ -112,6 +114,7 @@ export async function discoverRepos(
         currentBranch: branchInfo.currentBranch,
         behindCount: branchInfo.behindCount,
         defaultBranch: branchInfo.defaultBranch,
+        lastModifiedAt: gitStat?.mtime.toISOString(),
         exists: true,
       };
     }),
@@ -133,8 +136,10 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
   const results = await Promise.all(
     tracked.map(async (repo): Promise<DiscoveredRepo> => {
       let exists = true;
+      let gitStat: Awaited<ReturnType<typeof stat>> | null = null;
       try {
         await stat(repo.absPath);
+        gitStat = await stat(resolve(repo.absPath, ".git")).catch(() => null);
       } catch {
         exists = false;
       }
@@ -157,6 +162,7 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
         currentBranch: branchInfo.currentBranch,
         behindCount: branchInfo.behindCount,
         defaultBranch: branchInfo.defaultBranch,
+        lastModifiedAt: gitStat?.mtime.toISOString(),
         exists,
       };
     }),

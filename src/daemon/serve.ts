@@ -21,6 +21,7 @@ import { getHandler } from "./handlers.ts";
 import { handleApiRequest } from "./api.ts";
 import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
 import { loadTrackedRepos } from "../repo/tracking.ts";
+import { recomputeAllScores } from "../ctx/signals.ts";
 import dashboardHtmlContent from "./dashboard.html" with { type: "text" };
 
 // ── Constants ─────────────────────────────────────────────────────────
@@ -295,6 +296,9 @@ export async function serve(args: string[]): Promise<void> {
 
   // Recover orphaned jobs from previous crash
   await recoverOrphans();
+
+  // Recompute signal scores and prune stale data
+  await recomputeAllScores();
 
   // Drain any pending jobs that accumulated while daemon was down
   await drainPending();

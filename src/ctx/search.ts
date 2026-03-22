@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { loadIndex, hiveRoot, type IndexEntry } from "./store.ts";
 import type { Scope } from "./store.ts";
+import { getSignalScores, recordSearchHits } from "./signals.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -116,6 +117,9 @@ export async function search(
   const results: SearchResult[] = [];
   const root = hiveRoot();
 
+  // Load signal scores for all candidates in one read
+  const signalScores = await getSignalScores(candidates.map((e) => e.id));
+
   for (const entry of candidates) {
     const filePath = join(root, entry.path);
     let content = "";
@@ -125,8 +129,12 @@ export async function search(
       continue;
     }
 
-    const score = scoreEntry(tokens, entry, content);
-    if (score > 0) {
+    const textScore = scoreEntry(tokens, entry, content);
+    if (textScore > 0) {
+      // Apply multiplicative signal boost (at most 2x the text score)
+      const boost = signalScores[entry.id] ?? 0;
+      const score = textScore * (1 + boost);
+
       // Extract body (after frontmatter) for excerpt
       const bodyMatch = /^---\n[\s\S]*?\n---\n?([\s\S]*)$/.exec(content);
       const body = bodyMatch !== null ? (bodyMatch[1] ?? "").trim() : content;
@@ -141,7 +149,12 @@ export async function search(
 
   // Sort by score descending
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, limit);
+  const finalResults = results.slice(0, limit);
+
+  // Fire-and-forget: record which entries were served
+  void recordSearchHits(finalResults.map((r) => r.id));
+
+  return finalResults;
 }
 
 // ── Formatters ─────────────────────────────────────────────────────────

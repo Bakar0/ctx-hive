@@ -348,6 +348,38 @@ function existingEntriesBlock(existing: IndexEntry[], isUpdate: boolean): string
   }`;
 }
 
+function buildEvaluationBlock(servedEntries: ServedEntry[]): string {
+  if (servedEntries.length === 0) return "";
+
+  const entryList = servedEntries
+    .map((e) => `- id: ${e.id} — "${e.title}"`)
+    .join("\n");
+
+  return `## Additional Task: Evaluate Previously-Served Context
+
+The following context entries were served to this session via ctx-hive search:
+${entryList}
+
+For each entry, evaluate whether it was useful in the session:
+1. Was the entry referenced or acted upon?
+2. Did it influence a decision or prevent a mistake?
+3. Was it ignored or irrelevant to what the session was doing?
+
+Report your evaluation for each entry by running:
+\`\`\`
+ctx-hive evaluate --entry-id <id> --session-id <session-id> --rating <-1|0|1|2> --reason "brief reason"
+\`\`\`
+
+Rating scale:
+- **-1**: Entry was counterproductive (outdated, misleading, or caused confusion)
+- **0**: Entry was irrelevant to this session's work
+- **1**: Entry was referenced or acknowledged
+- **2**: Entry was heavily relied upon or prevented a mistake
+
+Do this BEFORE extracting new insights. Use the session ID from the transcript filename (without the .jsonl extension).
+`;
+}
+
 function ctxAddInstructions(meta: RepoMeta, isUpdate: boolean): string {
   return `### How to add entries:
 For short entries:
@@ -458,6 +490,11 @@ Now explore the repository, create the Project Overview, and generate insight en
   return sections.join("\n");
 }
 
+export interface ServedEntry {
+  id: string;
+  title: string;
+}
+
 /**
  * Build prompt for the Session Miner agent.
  */
@@ -466,6 +503,7 @@ export function buildSessionPrompt(
   sessionPaths: string[],
   existing: IndexEntry[],
   isUpdate: boolean,
+  servedEntries: ServedEntry[] = [],
 ): string {
   const fileList = sessionPaths.map((p) => `- ${p}`).join("\n");
 
@@ -541,6 +579,7 @@ ${existingEntriesBlock(existing, isUpdate)}
 
 ${ctxAddInstructions(meta, isUpdate)}
 
+${buildEvaluationBlock(servedEntries)}
 Now read the session files and generate context entries. Remember: only things an AI couldn't figure out by reading the code.`;
 }
 

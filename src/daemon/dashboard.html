@@ -155,6 +155,30 @@
   .btn-danger { border-color: var(--red); color: var(--red); }
   .btn-danger:hover { background: rgba(248,81,73,0.15); }
 
+  /* ── Score badge (table) ────────────────────────────────────── */
+  .score-badge { display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+  .score-low { background: rgba(248,81,73,0.15); color: var(--red); }
+  .score-mid { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .score-high { background: rgba(63,185,80,0.15); color: var(--green); }
+
+  /* ── Signals section (modal) ──────────────────────────────── */
+  .signal-section { margin-top: 16px; padding: 16px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; }
+  .signal-section h3 { font-size: 13px; color: var(--text2); margin: 0 0 12px 0;
+    text-transform: uppercase; letter-spacing: 0.05em; }
+  .score-bar-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .score-bar { flex: 1; height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
+  .score-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .score-label { font-size: 18px; font-weight: 700; min-width: 44px; }
+  .signal-stats { display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text2); }
+  .eval-list { display: flex; flex-direction: column; gap: 6px; }
+  .eval-item { display: flex; align-items: flex-start; gap: 8px; font-size: 12px;
+    padding: 6px 8px; background: var(--bg2); border-radius: 4px; }
+  .rating-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+  .eval-reason { color: var(--text2); flex: 1; }
+  .eval-meta { color: var(--text3); font-size: 11px; white-space: nowrap; }
+
   /* ── Empty state ────────────────────────────────────────────── */
   .empty { text-align: center; padding: 48px; color: var(--text3); }
   .empty-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.4; }
@@ -353,7 +377,7 @@
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Tags</th><th>Updated</th><th></th></tr></thead>
+          <thead><tr><th>Title</th><th>Scope</th><th>Project</th><th>Tags</th><th>Score</th><th>Updated</th><th></th></tr></thead>
           <tbody id="ctx-tbody"></tbody>
         </table>
       </div>
@@ -419,6 +443,7 @@
     <h2 id="modal-title"></h2>
     <div class="modal-meta" id="modal-meta"></div>
     <div class="modal-body" id="modal-body"></div>
+    <div id="modal-signals"></div>
     <div class="modal-actions">
       <button class="btn btn-danger" id="modal-delete">Delete</button>
       <button class="btn" id="modal-close">Close</button>
@@ -432,6 +457,7 @@ let ws = null;
 let metrics = null;
 let allJobs = [];
 let allContexts = [];
+let allSignals = {};
 let allRepos = [];
 let scanLoading = false;
 let syncingRepos = new Set();
@@ -514,8 +540,12 @@ async function fetchContexts() {
   if (project) params.set('project', project);
   if (sortBy) params.set('sortBy', sortBy);
   try {
-    const r = await fetch('/api/contexts?' + params);
-    allContexts = await r.json();
+    const [ctxRes, sigRes] = await Promise.all([
+      fetch('/api/contexts?' + params),
+      fetch('/api/signals'),
+    ]);
+    allContexts = await ctxRes.json();
+    try { const sig = await sigRes.json(); allSignals = sig.entries || {}; } catch { allSignals = {}; }
     renderContexts();
   } catch {}
 }
@@ -681,6 +711,74 @@ function formatCompact(n) {
   return String(n);
 }
 
+// ── Signal helpers ────────────────────────────────────────────────────
+
+function renderScoreBadge(signals) {
+  if (!signals) return '<span class="text-dim">—</span>';
+  const s = signals.score;
+  const cls = s < 0.3 ? 'score-low' : s < 0.6 ? 'score-mid' : 'score-high';
+  const hits = (signals.searchHits || []).reduce((sum, b) => sum + b.count, 0);
+  const evals = (signals.evaluations || []).length;
+  return '<span class="score-badge ' + cls + '" title="' + hits + ' hits / ' + evals + ' evals">' + s.toFixed(2) + '</span>';
+}
+
+function scoreBarColor(s) {
+  if (s < 0.3) return 'var(--red)';
+  if (s < 0.6) return 'var(--yellow)';
+  return 'var(--green)';
+}
+
+const RATING_COLORS = { '-1': 'var(--red)', '0': 'var(--text3)', '1': 'var(--yellow)', '2': 'var(--green)' };
+const RATING_LABELS = { '-1': 'Harmful', '0': 'Irrelevant', '1': 'Referenced', '2': 'Relied upon' };
+
+function renderModalSignals(signals) {
+  const el = document.getElementById('modal-signals');
+  if (!signals || (!signals.searchHits.length && !signals.evaluations.length)) {
+    el.innerHTML = '<div class="signal-section"><span class="text-dim" style="font-size:12px;">No signal data yet</span></div>';
+    return;
+  }
+  const s = signals.score;
+  const color = scoreBarColor(s);
+
+  // Recent hits (last 30 days)
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const recentHits = (signals.searchHits || [])
+    .filter(b => new Date(b.date).getTime() >= cutoff)
+    .reduce((sum, b) => sum + b.count, 0);
+  const totalHits = (signals.searchHits || []).reduce((sum, b) => sum + b.count, 0);
+
+  let evalsHtml = '';
+  if (signals.evaluations && signals.evaluations.length > 0) {
+    const items = signals.evaluations.slice().reverse().slice(0, 10).map(ev => {
+      const dotColor = RATING_COLORS[String(ev.rating)] || 'var(--text3)';
+      const label = RATING_LABELS[String(ev.rating)] || '?';
+      const reason = ev.reason ? esc(ev.reason) : '<span class="text-dim">no reason</span>';
+      const sid = ev.sessionId ? ev.sessionId.slice(0, 8) : '?';
+      return '<div class="eval-item">' +
+        '<span class="rating-dot" style="background:' + dotColor + ';" title="' + label + '"></span>' +
+        '<span class="eval-reason">' + reason + '</span>' +
+        '<span class="eval-meta mono">' + sid + '</span>' +
+        '<span class="eval-meta">' + timeAgo(ev.evaluatedAt) + '</span>' +
+        '</div>';
+    }).join('');
+    evalsHtml = '<div style="margin-top:12px;"><div style="font-size:11px;color:var(--text3);margin-bottom:6px;">EVALUATIONS</div><div class="eval-list">' + items + '</div></div>';
+  }
+
+  el.innerHTML = '<div class="signal-section">' +
+    '<h3>Signals</h3>' +
+    '<div class="score-bar-wrap">' +
+      '<span class="score-label" style="color:' + color + ';">' + s.toFixed(2) + '</span>' +
+      '<div class="score-bar"><div class="score-bar-fill" style="width:' + (s * 100) + '%;background:' + color + ';"></div></div>' +
+    '</div>' +
+    '<div class="signal-stats">' +
+      '<span>' + recentHits + ' hits (last 30d)</span>' +
+      '<span>' + totalHits + ' total hits</span>' +
+      '<span>' + (signals.evaluations || []).length + ' evaluations</span>' +
+    '</div>' +
+    evalsHtml +
+  '</div>';
+}
+
 // ── Render: Contexts ──────────────────────────────────────────────────
 function renderContexts() {
   const tbody = document.getElementById('ctx-tbody');
@@ -699,6 +797,7 @@ function renderContexts() {
       <td><span class="scope-badge scope-${c.scope}">${c.scope}</span></td>
       <td class="mono">${esc(c.project || '—')}</td>
       <td>${(c.tags || []).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}</td>
+      <td>${renderScoreBadge(allSignals[c.id])}</td>
       <td class="mono text-dim">${timeAgo(c.updated)}</td>
       <td><button class="btn-delete" onclick="event.stopPropagation();deleteContext('${esc(c.id)}')">delete</button></td>
     </tr>
@@ -718,6 +817,7 @@ function openContext(id) {
     ${(selectedContext.tags||[]).map(t => '<span class="tag">' + esc(t) + '</span>').join('')}
   `;
   document.getElementById('modal-body').textContent = selectedContext.body || '(empty)';
+  renderModalSignals(allSignals[selectedContext.id] || null);
   document.getElementById('modal-overlay').classList.add('open');
 }
 

@@ -14,6 +14,7 @@ import {
 } from "./store.ts";
 import { search, formatHuman, formatJson, formatMarkdown } from "./search.ts";
 import { ctxInit } from "./init.ts";
+import { recordEvaluation, type RelevanceEval } from "./signals.ts";
 import { join } from "node:path";
 import { getFlag, hasFlag } from "../cli/args.ts";
 
@@ -76,6 +77,12 @@ Subcommands:
   serve                          Start the daemon (watches for jobs)
     --verbose                    Show detailed output
     --port <n>                   Dashboard port (default: 3939)
+
+  evaluate                       Record a relevance evaluation for an entry
+    --entry-id <id>              Entry ID to evaluate (required)
+    --session-id <id>            Session that was evaluated (required)
+    --rating <-1|0|1|2>          Relevance rating (required)
+    --reason <text>              Brief reason for the rating
 
   enqueue <job-type>             Enqueue a job (reads payload from stdin)
 
@@ -272,6 +279,46 @@ async function ctxDelete(args: string[]): Promise<void> {
   console.log(`Deleted: ${resolved.scope}/${resolved.slug}`);
 }
 
+const VALID_RATINGS = new Set([-1, 0, 1, 2]);
+
+async function ctxEvaluate(args: string[]): Promise<void> {
+  const entryId = getFlag(args, "--entry-id");
+  if (entryId === undefined) {
+    console.error("Error: --entry-id is required");
+    process.exit(1);
+  }
+
+  const sessionId = getFlag(args, "--session-id");
+  if (sessionId === undefined) {
+    console.error("Error: --session-id is required");
+    process.exit(1);
+  }
+
+  const ratingStr = getFlag(args, "--rating");
+  if (ratingStr === undefined) {
+    console.error("Error: --rating is required (-1, 0, 1, or 2)");
+    process.exit(1);
+  }
+  const rating = parseInt(ratingStr, 10);
+  if (!VALID_RATINGS.has(rating)) {
+    console.error("Error: --rating must be -1, 0, 1, or 2");
+    process.exit(1);
+  }
+
+  const reason = getFlag(args, "--reason");
+
+  const evaluation: RelevanceEval = {
+    evaluatedAt: new Date().toISOString(),
+    sessionId,
+    // oxlint-disable-next-line no-unsafe-type-assertion -- validated above
+    rating: rating as -1 | 0 | 1 | 2,
+    ...(reason !== undefined ? { reason } : {}),
+  };
+
+  await recordEvaluation(entryId, evaluation);
+  console.log(`Evaluated: entry ${entryId} rated ${rating} for session ${sessionId.slice(0, 8)}`);
+}
+
 async function ctxRebuildIndex(): Promise<void> {
   const entries = await rebuildIndex();
   console.log(`Index rebuilt: ${entries.length} entries`);
@@ -302,6 +349,8 @@ export async function ctx(args: string[]): Promise<void> {
       return ctxEdit(args.slice(1));
     case "delete":
       return ctxDelete(args.slice(1));
+    case "evaluate":
+      return ctxEvaluate(args.slice(1));
     case "rebuild-index":
       return ctxRebuildIndex();
     case "init":

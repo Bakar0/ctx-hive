@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { z } from "zod";
 import { ensureJobDirs } from "../daemon/jobs.ts";
+
+const HookCommandSchema = z.object({ command: z.string().optional() });
+const HookEntrySchema = z.object({ hooks: z.array(HookCommandSchema).optional() });
+const SettingsSchema = z.object({
+  hooks: z.record(z.string(), z.array(HookEntrySchema)).optional(),
+}).passthrough();
 
 const CLAUDE_SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 
@@ -20,12 +27,10 @@ export async function installHook(): Promise<void> {
 
   // 2. Read existing settings (or start fresh)
   const settingsFile = Bun.file(CLAUDE_SETTINGS_PATH);
-  let settings: Record<string, unknown> = {};
+  let settings: z.infer<typeof SettingsSchema> = {};
   if (await settingsFile.exists()) {
     try {
-      const raw: unknown = await settingsFile.json();
-      // oxlint-disable-next-line no-unsafe-type-assertion -- settings.json schema
-      settings = raw as Record<string, unknown>;
+      settings = SettingsSchema.parse(await settingsFile.json());
     } catch {
       console.error(`Warning: could not parse ${CLAUDE_SETTINGS_PATH}, creating backup`);
       const backup = `${CLAUDE_SETTINGS_PATH}.bak.${Date.now()}`;
@@ -35,12 +40,8 @@ export async function installHook(): Promise<void> {
   }
 
   // 3. Merge hook into settings
-  const rawHooks: unknown = settings.hooks ?? {};
-  // oxlint-disable-next-line no-unsafe-type-assertion -- settings hooks schema
-  const hooks = rawHooks as Record<string, unknown[]>;
-  const rawSessionEnd: unknown = hooks.SessionEnd ?? [];
-  // oxlint-disable-next-line no-unsafe-type-assertion -- settings hooks schema
-  const sessionEndHooks = rawSessionEnd as Array<{ hooks?: Array<{ command?: string }> }>;
+  const hooks = settings.hooks ?? {};
+  const sessionEndHooks = hooks.SessionEnd ?? [];
 
   // Check if already installed
   const alreadyInstalled = sessionEndHooks.some((entry) =>

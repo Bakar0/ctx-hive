@@ -2,6 +2,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { z } from "zod";
 import {
   readJob,
   writeJob,
@@ -43,9 +44,7 @@ test("writeJob creates a valid JSON file", async () => {
 
   const path = await writeJob(dirA, job, "test-job.json");
   const raw = await readFile(path, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  // oxlint-disable-next-line no-unsafe-type-assertion -- test assertion
-  const data = parsed as Record<string, unknown>;
+  const data = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
 
   expect(data.type).toBe("session-mine");
   expect(data.sessionId).toBe("test-123");
@@ -130,9 +129,7 @@ test("failJob appends error info and moves to failed dir", async () => {
 
   expect(failedPath).toBe(join(FAILED_DIR, "fail-test.json"));
   const raw = await readFile(failedPath, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  // oxlint-disable-next-line no-unsafe-type-assertion -- test assertion
-  const data = parsed as Record<string, unknown>;
+  const data = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
   expect(data._error).toBe("something went wrong");
   expect(data._failedAt).toBeTruthy();
 

@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { z } from "zod";
 import {
   ensureJobDirs,
   writeJob,
@@ -8,12 +9,12 @@ import {
   type GitPullJob,
 } from "../daemon/jobs.ts";
 
-interface HookPayload {
-  session_id: string;
-  transcript_path: string;
-  cwd: string;
-  reason?: string;
-}
+const HookPayloadSchema = z.object({
+  session_id: z.string(),
+  transcript_path: z.string(),
+  cwd: z.string(),
+  reason: z.string().optional(),
+});
 
 // ── Arg helpers ──────────────────────────────────────────────────────
 
@@ -77,11 +78,9 @@ async function enqueueSessionMine(): Promise<void> {
     process.exit(1);
   }
 
-  let payload: HookPayload;
+  let payload: z.infer<typeof HookPayloadSchema>;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    // oxlint-disable-next-line no-unsafe-type-assertion -- hook stdin schema
-    payload = parsed as HookPayload;
+    payload = HookPayloadSchema.parse(JSON.parse(raw));
   } catch {
     console.error("Invalid JSON on stdin");
     process.exit(1);

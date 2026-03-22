@@ -1,23 +1,26 @@
 import { join, resolve } from "node:path";
 import { stat } from "node:fs/promises";
+import { z } from "zod";
 import { hiveRoot } from "../ctx/store.ts";
 import { resolveRepoMeta } from "../ctx/init.ts";
 
-// ── Types ──────────────────────────────────────────────────────────────
+// ── Schemas & Types ───────────────────────────────────────────────────
 
-export interface TrackedRepo {
-  name: string;
-  absPath: string;
-  org: string;
-  remoteUrl: string;
-  trackedAt: string;
-  lastScannedAt?: string;
-}
+const TrackedRepoSchema = z.object({
+  name: z.string(),
+  absPath: z.string(),
+  org: z.string(),
+  remoteUrl: z.string(),
+  trackedAt: z.string(),
+  lastScannedAt: z.string().optional(),
+});
 
-interface RepoStore {
-  repos: TrackedRepo[];
-  updatedAt: string;
-}
+const RepoStoreSchema = z.object({
+  repos: z.array(TrackedRepoSchema),
+  updatedAt: z.string(),
+});
+
+export type TrackedRepo = z.infer<typeof TrackedRepoSchema>;
 
 // ── Paths ──────────────────────────────────────────────────────────────
 
@@ -31,9 +34,7 @@ export async function loadTrackedRepos(): Promise<TrackedRepo[]> {
   const file = Bun.file(reposJsonPath());
   if (!(await file.exists())) return [];
   try {
-    const raw: unknown = await file.json();
-    // oxlint-disable-next-line no-unsafe-type-assertion -- repos.json schema
-    const data = raw as RepoStore;
+    const data = RepoStoreSchema.parse(await file.json());
     return data.repos ?? [];
   } catch {
     return [];
@@ -41,7 +42,7 @@ export async function loadTrackedRepos(): Promise<TrackedRepo[]> {
 }
 
 export async function saveTrackedRepos(repos: TrackedRepo[]): Promise<void> {
-  const store: RepoStore = {
+  const store: z.infer<typeof RepoStoreSchema> = {
     repos,
     updatedAt: new Date().toISOString(),
   };

@@ -1,5 +1,6 @@
 import { mkdir, readdir, rename, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
+import { z } from "zod";
 import { hiveRoot } from "../ctx/store.ts";
 
 // ── Path constants ────────────────────────────────────────────────────
@@ -10,45 +11,60 @@ export const PROCESSING_DIR = join(JOBS_ROOT, "processing");
 export const DONE_DIR = join(JOBS_ROOT, "done");
 export const FAILED_DIR = join(JOBS_ROOT, "failed");
 
-// ── Types ─────────────────────────────────────────────────────────────
+// ── Schemas & Types ──────────────────────────────────────────────────
 
-interface JobBase {
-  createdAt: string;
-}
+const SessionMineJobSchema = z.object({
+  type: z.literal("session-mine"),
+  createdAt: z.string(),
+  sessionId: z.string(),
+  transcriptPath: z.string(),
+  cwd: z.string(),
+  reason: z.string().optional(),
+});
 
-export interface SessionMineJob extends JobBase {
-  type: "session-mine";
-  sessionId: string;
-  transcriptPath: string;
-  cwd: string;
-  reason?: string;
-}
+const GitPushJobSchema = z.object({
+  type: z.literal("git-push"),
+  createdAt: z.string(),
+  repoPath: z.string(),
+  headSha: z.string(),
+  remoteName: z.string(),
+  remoteUrl: z.string(),
+  refs: z.array(z.object({
+    localRef: z.string(),
+    localSha: z.string(),
+    remoteRef: z.string(),
+    remoteSha: z.string(),
+  })),
+});
 
-export interface GitPushJob extends JobBase {
-  type: "git-push";
-  repoPath: string;
-  headSha: string;
-  remoteName: string;
-  remoteUrl: string;
-  refs: Array<{ localRef: string; localSha: string; remoteRef: string; remoteSha: string }>;
-}
+const GitPullJobSchema = z.object({
+  type: z.literal("git-pull"),
+  createdAt: z.string(),
+  repoPath: z.string(),
+  headSha: z.string(),
+  trigger: z.enum(["merge", "rebase"]),
+  squash: z.boolean().optional(),
+  rewrittenShas: z.array(z.object({ oldSha: z.string(), newSha: z.string() })).optional(),
+});
 
-export interface GitPullJob extends JobBase {
-  type: "git-pull";
-  repoPath: string;
-  headSha: string;
-  trigger: "merge" | "rebase";
-  squash?: boolean;
-  rewrittenShas?: Array<{ oldSha: string; newSha: string }>;
-}
+const RepoSyncJobSchema = z.object({
+  type: z.literal("repo-sync"),
+  createdAt: z.string(),
+  repoPath: z.string(),
+  cwd: z.string(),
+});
 
-export interface RepoSyncJob extends JobBase {
-  type: "repo-sync";
-  repoPath: string;
-  cwd: string;
-}
+export const JobSchema = z.discriminatedUnion("type", [
+  SessionMineJobSchema, GitPushJobSchema, GitPullJobSchema, RepoSyncJobSchema,
+]);
 
-export type Job = SessionMineJob | GitPushJob | GitPullJob | RepoSyncJob;
+export type SessionMineJob = z.infer<typeof SessionMineJobSchema>;
+export type GitPushJob = z.infer<typeof GitPushJobSchema>;
+export type GitPullJob = z.infer<typeof GitPullJobSchema>;
+export type RepoSyncJob = z.infer<typeof RepoSyncJobSchema>;
+export type Job = z.infer<typeof JobSchema>;
+
+const RawJobRecord = z.record(z.string(), z.unknown());
 
 export interface JobResult {
   success: boolean;
@@ -75,9 +91,7 @@ export async function ensureJobDirs(): Promise<void> {
 
 export async function readJob(path: string): Promise<Job> {
   const raw = await readFile(path, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  // oxlint-disable-next-line no-unsafe-type-assertion -- JSON shape validated by callers
-  return parsed as Job;
+  return JobSchema.parse(JSON.parse(raw));
 }
 
 export async function writeJob(dir: string, job: Job, filename: string): Promise<string> {
@@ -150,9 +164,7 @@ export async function isGitJobProcessed(headSha: string, repoPath: string): Prom
  */
 export async function stampStarted(jobPath: string): Promise<void> {
   const raw = await readFile(jobPath, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  // oxlint-disable-next-line no-unsafe-type-assertion -- augmenting job metadata
-  const job = parsed as Record<string, unknown>;
+  const job = RawJobRecord.parse(JSON.parse(raw));
   job._startedAt = new Date().toISOString();
   await Bun.write(jobPath, JSON.stringify(job, null, 2));
 }
@@ -162,9 +174,7 @@ export async function stampStarted(jobPath: string): Promise<void> {
  */
 export async function completeJob(jobPath: string, result: JobResult): Promise<string> {
   const raw = await readFile(jobPath, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  // oxlint-disable-next-line no-unsafe-type-assertion -- augmenting job metadata
-  const job = parsed as Record<string, unknown>;
+  const job = RawJobRecord.parse(JSON.parse(raw));
   job._completedAt = new Date().toISOString();
   job._duration_ms = result.duration_ms;
   if (result.transcriptTokens !== undefined) job._transcriptTokens = result.transcriptTokens;
@@ -180,9 +190,7 @@ export async function completeJob(jobPath: string, result: JobResult): Promise<s
  */
 export async function failJob(jobPath: string, error: string): Promise<string> {
   const raw = await readFile(jobPath, "utf-8");
-  const parsed: unknown = JSON.parse(raw);
-  // oxlint-disable-next-line no-unsafe-type-assertion -- augmenting job metadata
-  const job = parsed as Record<string, unknown>;
+  const job = RawJobRecord.parse(JSON.parse(raw));
   job._error = error;
   job._failedAt = new Date().toISOString();
   await Bun.write(jobPath, JSON.stringify(job, null, 2));

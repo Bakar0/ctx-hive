@@ -4,6 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
+import { z } from "zod";
 import {
   loadIndex,
   deleteEntry,
@@ -103,22 +104,25 @@ function projectFromCwd(cwd?: string): string {
   return basename(cwd);
 }
 
-interface RawJobFile {
-  type?: string;
-  createdAt?: string;
-  sessionId?: string;
-  cwd?: string;
-  reason?: string;
-  _error?: string;
-  _failedAt?: string;
-  _startedAt?: string;
-  _completedAt?: string;
-  _duration_ms?: number;
-  _transcriptTokens?: number;
-  _entriesCreated?: number;
-  _inputTokens?: number;
-  _outputTokens?: number;
-}
+const RawJobFileSchema = z.object({
+  type: z.string().optional(),
+  createdAt: z.string().optional(),
+  sessionId: z.string().optional(),
+  cwd: z.string().optional(),
+  reason: z.string().optional(),
+  _error: z.string().optional(),
+  _failedAt: z.string().optional(),
+  _startedAt: z.string().optional(),
+  _completedAt: z.string().optional(),
+  _duration_ms: z.number().optional(),
+  _transcriptTokens: z.number().optional(),
+  _entriesCreated: z.number().optional(),
+  _inputTokens: z.number().optional(),
+  _outputTokens: z.number().optional(),
+}).passthrough();
+
+const RepoBodySchema = z.object({ absPath: z.string().min(1) });
+const RepoOpenBodySchema = z.object({ absPath: z.string().min(1), target: z.string().optional() });
 
 async function loadJobsFromDir(
   dir: string,
@@ -129,9 +133,7 @@ async function loadJobsFromDir(
   for (const p of paths) {
     try {
       const raw = await readFile(p, "utf-8");
-      const parsed: unknown = JSON.parse(raw);
-      // oxlint-disable-next-line no-unsafe-type-assertion -- job file schema
-      const data = parsed as RawJobFile;
+      const data = RawJobFileSchema.parse(JSON.parse(raw));
       jobs.push({
         filename: basename(p),
         status,
@@ -326,11 +328,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // POST /api/repos/track
   if (path === "/api/repos/track" && req.method === "POST") {
     try {
-      const rawBody: unknown = await req.json();
-      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
-      const body = rawBody as { absPath?: string };
-      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
-      const tracked = await trackRepo(body.absPath);
+      const result = RepoBodySchema.safeParse(await req.json());
+      if (!result.success) return json({ error: "absPath required" }, 400);
+      const tracked = await trackRepo(result.data.absPath);
       broadcastRepoEvent("repo:tracked", tracked);
       return json(tracked);
     } catch (err) {
@@ -341,13 +341,11 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // POST /api/repos/untrack
   if (path === "/api/repos/untrack" && req.method === "POST") {
     try {
-      const rawBody: unknown = await req.json();
-      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
-      const body = rawBody as { absPath?: string };
-      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
-      const removed = await untrackRepo(body.absPath);
+      const result = RepoBodySchema.safeParse(await req.json());
+      if (!result.success) return json({ error: "absPath required" }, 400);
+      const removed = await untrackRepo(result.data.absPath);
       if (!removed) return json({ error: "Not tracked" }, 404);
-      broadcastRepoEvent("repo:untracked", { absPath: body.absPath });
+      broadcastRepoEvent("repo:untracked", { absPath: result.data.absPath });
       return json({ ok: true });
     } catch (err) {
       return json({ error: err instanceof Error ? err.message : "Untrack failed" }, 400);
@@ -357,19 +355,17 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // POST /api/repos/sync — full context sync (enqueues init-style job)
   if (path === "/api/repos/sync" && req.method === "POST") {
     try {
-      const rawBody: unknown = await req.json();
-      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
-      const body = rawBody as { absPath?: string };
-      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
-      await updateLastScanned(body.absPath);
+      const result = RepoBodySchema.safeParse(await req.json());
+      if (!result.success) return json({ error: "absPath required" }, 400);
+      await updateLastScanned(result.data.absPath);
       const { ensureJobDirs, writeJob, PENDING_DIR: pendingDir } = await import("./jobs.ts");
       await ensureJobDirs();
-      const repoName = basename(body.absPath);
+      const repoName = basename(result.data.absPath);
       const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
       const syncJob = {
         type: "repo-sync" as const,
-        repoPath: body.absPath,
-        cwd: body.absPath,
+        repoPath: result.data.absPath,
+        cwd: result.data.absPath,
         createdAt: new Date().toISOString(),
       };
       await writeJob(pendingDir, syncJob, `${timestamp}-sync-${repoName}.json`);
@@ -382,14 +378,13 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // POST /api/repos/open — open repo in VS Code or terminal
   if (path === "/api/repos/open" && req.method === "POST") {
     try {
-      const rawBody: unknown = await req.json();
-      // oxlint-disable-next-line no-unsafe-type-assertion -- request body schema
-      const body = rawBody as { absPath?: string; target?: string };
-      if (body.absPath == null || body.absPath === "") return json({ error: "absPath required" }, 400);
-      if (body.target === "vscode") {
-        Bun.spawn(["code", body.absPath]);
-      } else if (body.target === "terminal") {
-        openInTerminal(body.absPath);
+      const result = RepoOpenBodySchema.safeParse(await req.json());
+      if (!result.success) return json({ error: "absPath required" }, 400);
+      const { absPath, target } = result.data;
+      if (target === "vscode") {
+        Bun.spawn(["code", absPath]);
+      } else if (target === "terminal") {
+        openInTerminal(absPath);
       } else {
         return json({ error: "target must be 'vscode' or 'terminal'" }, 400);
       }

@@ -7,6 +7,9 @@ export const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
 /** Directory where Claude stores per-PID session identity files (<pid>.json). */
 export const CLAUDE_SESSIONS_DIR = join(homedir(), ".claude", "sessions");
 
+/** Claude Code user settings file. */
+export const CLAUDE_SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
+
 /**
  * Encode an absolute path to match Claude's session directory naming.
  * /Users/foo/myrepo -> -Users-foo-myrepo

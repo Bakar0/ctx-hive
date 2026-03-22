@@ -3,11 +3,13 @@ import { z } from "zod";
 import {
   ensureJobDirs,
   writeJob,
+  jobTimestamp,
   PENDING_DIR,
   type SessionMineJob,
   type GitPushJob,
   type GitPullJob,
 } from "../daemon/jobs.ts";
+import { getFlag, readStdin } from "../cli/args.ts";
 
 const HookPayloadSchema = z.object({
   session_id: z.string(),
@@ -16,32 +18,8 @@ const HookPayloadSchema = z.object({
   reason: z.string().optional(),
 });
 
-// ── Arg helpers ──────────────────────────────────────────────────────
-
-function getFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  return args[idx + 1];
-}
-
-// ── Stdin reader ─────────────────────────────────────────────────────
-
-async function readStdin(): Promise<string> {
-  const chunks: Uint8Array[] = [];
-  const reader = Bun.stdin.stream().getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf-8").trim();
-}
-
-// ── Job filename helper ──────────────────────────────────────────────
-
 function jobFilename(prefix: string): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${timestamp}-${prefix}.json`;
+  return `${jobTimestamp()}-${prefix}.json`;
 }
 
 // ── Enqueue entry point ──────────────────────────────────────────────
@@ -93,7 +71,6 @@ async function enqueueSessionMine(): Promise<void> {
 
   await ensureJobDirs();
 
-  const now = new Date();
   const prefix = (payload.session_id ?? "unknown").slice(0, 8);
 
   const job: SessionMineJob = {
@@ -102,7 +79,7 @@ async function enqueueSessionMine(): Promise<void> {
     transcriptPath: payload.transcript_path,
     cwd: payload.cwd,
     reason: payload.reason,
-    createdAt: now.toISOString(),
+    createdAt: new Date().toISOString(),
   };
 
   await writeJob(PENDING_DIR, job, jobFilename(prefix));

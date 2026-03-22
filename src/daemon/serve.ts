@@ -2,6 +2,7 @@ import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { hiveRoot } from "../ctx/store.ts";
+import { errorMessage } from "../git/run.ts";
 import {
   ensureJobDirs,
   listJobs,
@@ -18,7 +19,7 @@ import {
 } from "./jobs.ts";
 import { getHandler } from "./handlers.ts";
 import { handleApiRequest } from "./api.ts";
-import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent } from "./ws.ts";
+import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
 import { loadTrackedRepos } from "../repo/tracking.ts";
 import dashboardHtmlContent from "./dashboard.html" with { type: "text" };
 
@@ -80,7 +81,7 @@ async function processJob(jobPath: string): Promise<void> {
   try {
     job = await readJob(jobPath);
   } catch (err) {
-    log("error", `failed to read job ${jobPath}: ${err instanceof Error ? err.message : String(err)}`);
+    log("error", `failed to read job ${jobPath}: ${errorMessage(err)}`);
     await failJob(jobPath, "malformed job file");
     return;
   }
@@ -140,7 +141,7 @@ async function processJob(jobPath: string): Promise<void> {
       broadcastJobEvent("job:failed", job);
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     await failJob(processingPath, msg);
     log("error", `failed: ${job.type} — ${msg}`);
     broadcastJobEvent("job:failed", job);
@@ -301,6 +302,7 @@ export async function serve(args: string[]): Promise<void> {
   // Watch for new jobs
   watcher = watch(PENDING_DIR, () => {
     debug("fs.watch triggered");
+    markMetricsDirty();
     void drainPending();
   });
 

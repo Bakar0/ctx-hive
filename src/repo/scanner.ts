@@ -2,8 +2,9 @@ import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { scanForRepos, resolveRepoMeta } from "../ctx/init.ts";
-import { loadIndex } from "../ctx/store.ts";
+import { loadIndex, type IndexEntry } from "../ctx/store.ts";
 import { loadTrackedRepos, type TrackedRepo } from "./tracking.ts";
+import { runGit } from "../git/run.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -23,54 +24,21 @@ export interface DiscoveredRepo {
   exists: boolean;
 }
 
-// ── Git helpers ────────────────────────────────────────────────────────
-
-async function gitCommand(
-  repoPath: string,
-  args: string[],
-): Promise<string> {
-  try {
-    const proc = Bun.spawn(["git", ...args], {
-      cwd: repoPath,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const text = await new Response(proc.stdout).text();
-    await proc.exited;
-    return text.trim();
-  } catch {
-    return "";
-  }
-}
-
 export async function getRepoBranchInfo(
   repoPath: string,
 ): Promise<{ currentBranch: string; behindCount: number; defaultBranch: string }> {
-  const currentBranch = await gitCommand(repoPath, [
-    "rev-parse",
-    "--abbrev-ref",
-    "HEAD",
+  // Run independent git commands in parallel
+  const [currentBranch, remoteHead] = await Promise.all([
+    runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath),
+    runGit(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], repoPath),
   ]);
 
-  // Try to detect default branch from origin
-  let defaultBranch = "main";
-  const remoteHead = await gitCommand(repoPath, [
-    "symbolic-ref",
-    "refs/remotes/origin/HEAD",
-    "--short",
-  ]);
-  if (remoteHead) {
-    // e.g. "origin/main" -> "main"
-    defaultBranch = remoteHead.replace(/^origin\//, "");
-  }
+  // Detect default branch from origin
+  const defaultBranch = remoteHead ? remoteHead.replace(/^origin\//, "") : "main";
 
-  // Count commits behind remote default branch
+  // Count commits behind (depends on defaultBranch)
   let behindCount = 0;
-  const behindStr = await gitCommand(repoPath, [
-    "rev-list",
-    "--count",
-    `HEAD..origin/${defaultBranch}`,
-  ]);
+  const behindStr = await runGit(["rev-list", "--count", `HEAD..origin/${defaultBranch}`], repoPath);
   if (behindStr) {
     const n = parseInt(behindStr, 10);
     if (!Number.isNaN(n)) behindCount = n;
@@ -87,6 +55,18 @@ function expandHome(p: string): string {
   return resolve(p);
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+function buildContextCountMap(index: IndexEntry[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const entry of index) {
+    if (entry.project) {
+      counts.set(entry.project, (counts.get(entry.project) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 // ── Discover repos ─────────────────────────────────────────────────────
 
 export async function discoverRepos(
@@ -101,13 +81,7 @@ export async function discoverRepos(
     loadIndex(),
   ]);
 
-  // Build context count map: project name -> count
-  const contextCounts = new Map<string, number>();
-  for (const entry of index) {
-    if (entry.project) {
-      contextCounts.set(entry.project, (contextCounts.get(entry.project) ?? 0) + 1);
-    }
-  }
+  const contextCounts = buildContextCountMap(index);
 
   // Build tracked map: absPath -> TrackedRepo
   const trackedMap = new Map<string, TrackedRepo>();
@@ -154,12 +128,7 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
     loadIndex(),
   ]);
 
-  const contextCounts = new Map<string, number>();
-  for (const entry of index) {
-    if (entry.project) {
-      contextCounts.set(entry.project, (contextCounts.get(entry.project) ?? 0) + 1);
-    }
-  }
+  const contextCounts = buildContextCountMap(index);
 
   const results = await Promise.all(
     tracked.map(async (repo): Promise<DiscoveredRepo> => {

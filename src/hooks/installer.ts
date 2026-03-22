@@ -1,15 +1,12 @@
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { z } from "zod";
 import { ensureJobDirs } from "../daemon/jobs.ts";
+import { CLAUDE_SETTINGS_PATH } from "../adapter/claude-paths.ts";
 
 const HookCommandSchema = z.object({ command: z.string().optional() });
 const HookEntrySchema = z.object({ hooks: z.array(HookCommandSchema).optional() });
 const SettingsSchema = z.object({
   hooks: z.record(z.string(), z.array(HookEntrySchema)).optional(),
 }).passthrough();
-
-const CLAUDE_SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 
 const HOOK_ENTRY = {
   matcher: "",

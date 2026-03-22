@@ -2,7 +2,6 @@
  * REST API endpoints for the ctx-hive dashboard.
  * Provides read access to jobs, contexts (entries), and metrics.
  */
-import { readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { z } from "zod";
 import {
@@ -20,6 +19,9 @@ import {
   DONE_DIR,
   FAILED_DIR,
   listJobs,
+  RawJobFileSchema,
+  enqueueRepoSync,
+  type JobStatus,
 } from "./jobs.ts";
 import {
   trackRepo,
@@ -31,12 +33,13 @@ import {
   enrichTrackedRepos,
 } from "../repo/scanner.ts";
 import { broadcastRepoEvent } from "./ws.ts";
+import { errorMessage } from "../git/run.ts";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
 export interface JobView {
   filename: string;
-  status: "pending" | "processing" | "done" | "failed";
+  status: JobStatus;
   type: string;
   createdAt: string;
   sessionId?: string;
@@ -104,23 +107,6 @@ function projectFromCwd(cwd?: string): string {
   return basename(cwd);
 }
 
-const RawJobFileSchema = z.object({
-  type: z.string().optional(),
-  createdAt: z.string().optional(),
-  sessionId: z.string().optional(),
-  cwd: z.string().optional(),
-  reason: z.string().optional(),
-  _error: z.string().optional(),
-  _failedAt: z.string().optional(),
-  _startedAt: z.string().optional(),
-  _completedAt: z.string().optional(),
-  _duration_ms: z.number().optional(),
-  _transcriptTokens: z.number().optional(),
-  _entriesCreated: z.number().optional(),
-  _inputTokens: z.number().optional(),
-  _outputTokens: z.number().optional(),
-}).passthrough();
-
 const RepoBodySchema = z.object({ absPath: z.string().min(1) });
 const RepoOpenBodySchema = z.object({ absPath: z.string().min(1), target: z.string().optional() });
 
@@ -129,35 +115,36 @@ async function loadJobsFromDir(
   status: JobView["status"]
 ): Promise<JobView[]> {
   const paths = await listJobs(dir);
-  const jobs: JobView[] = [];
-  for (const p of paths) {
-    try {
-      const raw = await readFile(p, "utf-8");
-      const data = RawJobFileSchema.parse(JSON.parse(raw));
-      jobs.push({
-        filename: basename(p),
-        status,
-        type: data.type ?? "unknown",
-        createdAt: data.createdAt ?? "",
-        sessionId: data.sessionId,
-        cwd: data.cwd,
-        project: projectFromCwd(data.cwd),
-        reason: data.reason,
-        error: data._error,
-        failedAt: data._failedAt,
-        startedAt: data._startedAt,
-        completedAt: data._completedAt,
-        duration_ms: data._duration_ms,
-        transcriptTokens: data._transcriptTokens,
-        entriesCreated: data._entriesCreated,
-        inputTokens: data._inputTokens,
-        outputTokens: data._outputTokens,
-      });
-    } catch {
-      // skip malformed
-    }
-  }
-  return jobs;
+  const results = await Promise.all(
+    paths.map(async (p): Promise<JobView | null> => {
+      try {
+        const raw = await Bun.file(p).text();
+        const data = RawJobFileSchema.parse(JSON.parse(raw));
+        return {
+          filename: basename(p),
+          status,
+          type: data.type ?? "unknown",
+          createdAt: data.createdAt ?? "",
+          sessionId: data.sessionId,
+          cwd: data.cwd,
+          project: projectFromCwd(data.cwd),
+          reason: data.reason,
+          error: data._error,
+          failedAt: data._failedAt,
+          startedAt: data._startedAt,
+          completedAt: data._completedAt,
+          duration_ms: data._duration_ms,
+          transcriptTokens: data._transcriptTokens,
+          entriesCreated: data._entriesCreated,
+          inputTokens: data._inputTokens,
+          outputTokens: data._outputTokens,
+        };
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return results.filter((j): j is JobView => j !== null);
 }
 
 // ── API Functions ─────────────────────────────────────────────────────
@@ -321,7 +308,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     try {
       return json(await discoverRepos(root, depth));
     } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Scan failed" }, 400);
+      return json({ error: errorMessage(err) }, 400);
     }
   }
 
@@ -334,7 +321,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       broadcastRepoEvent("repo:tracked", tracked);
       return json(tracked);
     } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Track failed" }, 400);
+      return json({ error: errorMessage(err) }, 400);
     }
   }
 
@@ -348,7 +335,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       broadcastRepoEvent("repo:untracked", { absPath: result.data.absPath });
       return json({ ok: true });
     } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Untrack failed" }, 400);
+      return json({ error: errorMessage(err) }, 400);
     }
   }
 
@@ -358,20 +345,10 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       const result = RepoBodySchema.safeParse(await req.json());
       if (!result.success) return json({ error: "absPath required" }, 400);
       await updateLastScanned(result.data.absPath);
-      const { ensureJobDirs, writeJob, PENDING_DIR: pendingDir } = await import("./jobs.ts");
-      await ensureJobDirs();
-      const repoName = basename(result.data.absPath);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const syncJob = {
-        type: "repo-sync" as const,
-        repoPath: result.data.absPath,
-        cwd: result.data.absPath,
-        createdAt: new Date().toISOString(),
-      };
-      await writeJob(pendingDir, syncJob, `${timestamp}-sync-${repoName}.json`);
+      await enqueueRepoSync(result.data.absPath);
       return json({ ok: true, message: "Sync job enqueued" });
     } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Sync failed" }, 400);
+      return json({ error: errorMessage(err) }, 400);
     }
   }
 
@@ -390,7 +367,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       }
       return json({ ok: true });
     } catch (err) {
-      return json({ error: err instanceof Error ? err.message : "Open failed" }, 400);
+      return json({ error: errorMessage(err) }, 400);
     }
   }
 

@@ -42,6 +42,7 @@ export function broadcastJobEvent(
   type: "job:started" | "job:completed" | "job:failed" | "job:queued",
   job: unknown
 ): void {
+  metricsDirty = true;
   broadcast(type, job);
 }
 
@@ -49,6 +50,7 @@ export function broadcastContextEvent(
   type: "context:created" | "context:deleted",
   data: unknown
 ): void {
+  metricsDirty = true;
   broadcast(type, data);
 }
 
@@ -56,17 +58,24 @@ export function broadcastRepoEvent(
   type: "repo:tracked" | "repo:untracked" | "repo:scan-complete",
   data: unknown
 ): void {
+  metricsDirty = true;
   broadcast(type, data);
 }
 
-// ── Periodic metrics push ─────────────────────────────────────────────
+// ── Periodic metrics push (dirty-flag gated) ──────────────────────────
 
 let metricsInterval: ReturnType<typeof setInterval> | null = null;
+let metricsDirty = true; // start dirty so first broadcast sends data
+
+export function markMetricsDirty(): void {
+  metricsDirty = true;
+}
 
 export function startMetricsBroadcast(intervalMs = 5_000): void {
   if (metricsInterval) return;
   metricsInterval = setInterval(() => {
-    if (clients.size === 0) return;
+    if (clients.size === 0 || !metricsDirty) return;
+    metricsDirty = false;
     void (async () => {
       try {
         const metrics = await getMetrics();

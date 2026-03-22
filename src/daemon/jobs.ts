@@ -84,6 +84,7 @@ export const RawJobFileSchema = z.object({
   createdAt: z.string().optional(),
   sessionId: z.string().optional(),
   cwd: z.string().optional(),
+  repoPath: z.string().optional(),
   reason: z.string().optional(),
   _error: z.string().optional(),
   _failedAt: z.string().optional(),

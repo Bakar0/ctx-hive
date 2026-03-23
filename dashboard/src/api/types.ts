@@ -123,6 +123,24 @@ export interface SearchStats {
   avgScoreOfServed: number;
 }
 
+export interface SessionServedEntry {
+  id: string;
+  title: string;
+  maxScore: number;
+  rating?: -1 | 0 | 1 | 2;
+  reason?: string;
+}
+
+export interface SessionSummary {
+  sessionId: string;
+  project: string;
+  firstSeen: string;
+  lastSeen: string;
+  injectionCount: number;
+  servedEntries: SessionServedEntry[];
+  evaluationComplete: boolean;
+}
+
 export interface TrackedRepo {
   name: string;
   absPath: string;

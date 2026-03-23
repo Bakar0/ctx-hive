@@ -5,6 +5,7 @@
   import Contexts from "./pages/Contexts.svelte";
   import Repos from "./pages/Repos.svelte";
   import Search from "./pages/Search.svelte";
+  import Evaluations from "./pages/Evaluations.svelte";
   import { DashboardSocket } from "./state/socket.svelte.ts";
   import * as api from "./api/client";
 
@@ -16,6 +17,7 @@
   let jobsRef = $state<Jobs>();
   let contextsRef = $state<Contexts>();
   let reposRef = $state<Repos>();
+  let evaluationsRef = $state<Evaluations>();
 
   $effect(() => {
     socket.connect();
@@ -31,6 +33,7 @@
     socket.on("repo:tracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
     socket.on("repo:untracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
     socket.on("repo:scan-complete", () => { if (page === "repos") reposRef?.fetchRepos(); });
+    socket.on("job:completed", () => { if (page === "evaluations") evaluationsRef?.fetchSessions(); });
 
     return () => socket.disconnect();
   });
@@ -68,6 +71,8 @@
       <Repos bind:this={reposRef} />
     {:else if page === "search"}
       <Search />
+    {:else if page === "evaluations"}
+      <Evaluations bind:this={evaluationsRef} {projects} />
     {/if}
   </main>
 </div>

@@ -204,12 +204,20 @@ export async function completeJob(jobPath: string, result: JobResult): Promise<s
  * Mark a failed job by appending error info and moving to failed/.
  */
 export async function failJob(jobPath: string, error: string): Promise<string> {
-  const raw = await Bun.file(jobPath).text();
-  const job = RawJobRecord.parse(JSON.parse(raw));
-  job._error = error;
-  job._failedAt = new Date().toISOString();
-  await Bun.write(jobPath, JSON.stringify(job, null, 2));
-  return moveJob(jobPath, FAILED_DIR);
+  try {
+    const raw = await Bun.file(jobPath).text();
+    const job = RawJobRecord.parse(JSON.parse(raw));
+    job._error = error;
+    job._failedAt = new Date().toISOString();
+    await Bun.write(jobPath, JSON.stringify(job, null, 2));
+    return moveJob(jobPath, FAILED_DIR);
+  } catch {
+    // Job file already gone — write a minimal failure record directly
+    const dest = join(FAILED_DIR, basename(jobPath));
+    const stub = { _error: error, _failedAt: new Date().toISOString(), _originalPath: jobPath };
+    await Bun.write(dest, JSON.stringify(stub, null, 2));
+    return dest;
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

@@ -54,10 +54,12 @@ function formatInjectResult(results: SearchResult[]): string {
 async function tryDaemonSearch(
   query: string,
   project?: string,
+  sessionId?: string,
 ): Promise<SearchResult[] | null> {
   try {
     const params = new URLSearchParams({ q: query, limit: String(MAX_RESULTS), source: "inject" });
     if (project !== undefined && project !== "") params.set("project", project);
+    if (sessionId !== undefined && sessionId !== "") params.set("sessionId", sessionId);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DAEMON_TIMEOUT_MS);
@@ -134,7 +136,7 @@ export async function handleInject(): Promise<void> {
     const sessionId = payload.session_id;
 
     // Try daemon first, fall back to direct search
-    let results = await tryDaemonSearch(promptText, project);
+    let results = await tryDaemonSearch(promptText, project, sessionId);
     results ??= await search(promptText, { project }, MAX_RESULTS, {
       source: "inject",
       project,

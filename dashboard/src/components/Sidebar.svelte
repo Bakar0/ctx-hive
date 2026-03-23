@@ -15,6 +15,7 @@
     { id: "contexts", label: "Contexts", icon: "contexts" },
     { id: "repos", label: "Repos", icon: "repos" },
     { id: "search", label: "Search", icon: "search" },
+    { id: "evaluations", label: "Evaluations", icon: "evaluations" },
   ] as const;
 </script>
 
@@ -48,6 +49,8 @@
             <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/>
           {:else if p.icon === "search"}
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          {:else if p.icon === "evaluations"}
+            <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
           {/if}
         </svg>
         {p.label}

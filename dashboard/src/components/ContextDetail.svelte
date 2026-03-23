@@ -8,6 +8,7 @@
   import { renderMarkdown } from "../format/markdown";
   import * as api from "../api/client";
   import type { ContextEntry, EntrySignals } from "../api/types";
+  import { computeUsageScore, computeRelevanceScore, RATING_LEGEND } from "$lib/scoring";
 
   interface Props {
     contextId: string | null;
@@ -43,6 +44,9 @@
     return s < 0.3 ? "var(--destructive)" : s < 0.6 ? "var(--warning)" : "var(--success)";
   }
 
+  let usageScore = $derived(signals ? computeUsageScore(signals.searchHits ?? [], new Date()) : 0);
+  let relevanceScore = $derived(signals ? computeRelevanceScore(signals.evaluations ?? [], new Date()) : 0.5);
+
   let evalCounts = $derived.by(() => {
     const evals = signals?.evaluations ?? [];
     const c: Record<string, number> = { "-1": 0, "0": 0, "1": 0, "2": 0 };
@@ -50,8 +54,8 @@
     return Object.entries(c).filter(([, v]) => v > 0);
   });
 
-  const RATING_COLORS: Record<string, string> = { "-1": "var(--destructive)", "0": "var(--dim)", "1": "var(--warning)", "2": "var(--success)" };
-  const RATING_LABELS: Record<string, string> = { "-1": "Harmful", "0": "Irrelevant", "1": "Referenced", "2": "Relied upon" };
+  const RATING_COLORS: Record<string, string> = Object.fromEntries(RATING_LEGEND.map(r => [String(r.rating), r.color]));
+  const RATING_LABELS: Record<string, string> = Object.fromEntries(RATING_LEGEND.map(r => [String(r.rating), r.label]));
 
   async function handleDelete(id: string) {
     if (!confirm("Delete this context entry? This cannot be undone.")) return;
@@ -132,6 +136,22 @@
               <div class="h-full rounded transition-[width] duration-300" style="width:{signals.score * 100}%;background:{scoreBarColor(signals.score)}"></div>
             </div>
           </div>
+          <div class="flex flex-col gap-1.5 mb-3">
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <span class="min-w-[120px]">Usage <span class="text-dim">(30%)</span></span>
+              <span class="font-mono font-medium min-w-9" style="color:{scoreBarColor(usageScore)}">{usageScore.toFixed(2)}</span>
+              <div class="flex-1 h-1.5 bg-muted rounded overflow-hidden">
+                <div class="h-full rounded transition-[width] duration-300" style="width:{usageScore * 100}%;background:{scoreBarColor(usageScore)}"></div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 text-xs text-muted-foreground">
+              <span class="min-w-[120px]">Relevance <span class="text-dim">(70%)</span></span>
+              <span class="font-mono font-medium min-w-9" style="color:{scoreBarColor(relevanceScore)}">{relevanceScore.toFixed(2)}</span>
+              <div class="flex-1 h-1.5 bg-muted rounded overflow-hidden">
+                <div class="h-full rounded transition-[width] duration-300" style="width:{relevanceScore * 100}%;background:{scoreBarColor(relevanceScore)}"></div>
+              </div>
+            </div>
+          </div>
           <div class="flex gap-4 mb-3 text-xs text-muted-foreground">
             <span>{(signals.searchHits ?? []).filter(b => new Date(b.date).getTime() >= Date.now() - 30 * 86400000).reduce((s, b) => s + b.count, 0)} hits (last 30d)</span>
             <span>{(signals.searchHits ?? []).reduce((s, b) => s + b.count, 0)} total hits</span>
@@ -143,6 +163,15 @@
                 <span class="flex items-center gap-1">
                   <span class="size-2 rounded-full inline-block" style="background:{RATING_COLORS[rating]}"></span>
                   {count} {RATING_LABELS[rating]?.toLowerCase() ?? "?"}
+                </span>
+              {/each}
+            </div>
+            <div class="flex items-center gap-3 flex-wrap mb-2 text-[11px] text-dim">
+              <span class="uppercase tracking-wider">Rating key</span>
+              {#each RATING_LEGEND as r}
+                <span class="flex items-center gap-1">
+                  <span class="size-2 rounded-full inline-block" style="background:{r.color}"></span>
+                  {r.label} = {r.normalized.toFixed(2)}
                 </span>
               {/each}
             </div>

@@ -20,6 +20,8 @@ export interface DiscoveredRepo {
   contextCount: number;
   currentBranch: string;
   behindCount: number;
+  modifiedCount: number;
+  untrackedCount: number;
   defaultBranch: string;
   lastModifiedAt?: string;
   exists: boolean;
@@ -27,11 +29,12 @@ export interface DiscoveredRepo {
 
 export async function getRepoBranchInfo(
   repoPath: string,
-): Promise<{ currentBranch: string; behindCount: number; defaultBranch: string }> {
+): Promise<{ currentBranch: string; behindCount: number; modifiedCount: number; untrackedCount: number; defaultBranch: string }> {
   // Run independent git commands in parallel
-  const [currentBranch, remoteHead] = await Promise.all([
+  const [currentBranch, remoteHead, statusOutput] = await Promise.all([
     runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath),
     runGit(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], repoPath),
+    runGit(["status", "--porcelain"], repoPath),
   ]);
 
   // Detect default branch from origin
@@ -45,7 +48,15 @@ export async function getRepoBranchInfo(
     if (!Number.isNaN(n)) behindCount = n;
   }
 
-  return { currentBranch, behindCount, defaultBranch };
+  // Parse working tree status
+  let modifiedCount = 0;
+  let untrackedCount = 0;
+  for (const line of (statusOutput ?? "").split("\n")) {
+    if (line.startsWith("??")) untrackedCount++;
+    else if (line.length > 0) modifiedCount++;
+  }
+
+  return { currentBranch, behindCount, modifiedCount, untrackedCount, defaultBranch };
 }
 
 // ── Path helpers ───────────────────────────────────────────────────────
@@ -113,6 +124,8 @@ export async function discoverRepos(
         contextCount: contextCounts.get(meta.name) ?? 0,
         currentBranch: branchInfo.currentBranch,
         behindCount: branchInfo.behindCount,
+        modifiedCount: branchInfo.modifiedCount,
+        untrackedCount: branchInfo.untrackedCount,
         defaultBranch: branchInfo.defaultBranch,
         lastModifiedAt: gitStat?.mtime.toISOString(),
         exists: true,
@@ -144,7 +157,7 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
         exists = false;
       }
 
-      let branchInfo = { currentBranch: "", behindCount: 0, defaultBranch: "main" };
+      let branchInfo = { currentBranch: "", behindCount: 0, modifiedCount: 0, untrackedCount: 0, defaultBranch: "main" };
       if (exists) {
         branchInfo = await getRepoBranchInfo(repo.absPath);
       }
@@ -161,6 +174,8 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
         contextCount: contextCounts.get(repo.name) ?? 0,
         currentBranch: branchInfo.currentBranch,
         behindCount: branchInfo.behindCount,
+        modifiedCount: branchInfo.modifiedCount,
+        untrackedCount: branchInfo.untrackedCount,
         defaultBranch: branchInfo.defaultBranch,
         lastModifiedAt: gitStat?.mtime.toISOString(),
         exists,

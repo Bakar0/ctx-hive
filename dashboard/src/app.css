@@ -1,0 +1,197 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Theme: GitHub-inspired dark palette mapped to shadcn CSS variables.
+ * Dark-only — identical values in :root and .dark so components work
+ * regardless of how they detect dark mode.
+ */
+:root,
+.dark {
+  /* Backgrounds */
+  --background: oklch(0.145 0.014 256);    /* #0d1117 */
+  --foreground: oklch(0.925 0.013 256);    /* #e6edf3 */
+  --card: oklch(0.185 0.014 256);          /* #161b22 */
+  --card-foreground: oklch(0.925 0.013 256);
+  --popover: oklch(0.185 0.014 256);       /* #161b22 */
+  --popover-foreground: oklch(0.925 0.013 256);
+
+  /* Muted / secondary surfaces */
+  --muted: oklch(0.24 0.012 256);          /* #21262d */
+  --muted-foreground: oklch(0.62 0.01 256);/* #8b949e */
+  --secondary: oklch(0.24 0.012 256);      /* #21262d */
+  --secondary-foreground: oklch(0.925 0.013 256);
+  --accent: oklch(0.24 0.012 256);         /* #21262d (surface accent) */
+  --accent-foreground: oklch(0.925 0.013 256);
+
+  /* Primary (blue accent) */
+  --primary: oklch(0.68 0.16 250);         /* #58a6ff */
+  --primary-foreground: oklch(0.145 0.014 256);
+
+  /* Destructive (red) */
+  --destructive: oklch(0.65 0.2 25);       /* #f85149 */
+  --destructive-foreground: oklch(0.145 0.014 256);
+
+  /* Borders & input */
+  --border: oklch(0.30 0.01 256);          /* #30363d */
+  --input: oklch(0.30 0.01 256);           /* #30363d */
+  --ring: oklch(0.68 0.16 250);            /* #58a6ff */
+
+  /* Sidebar */
+  --sidebar: oklch(0.185 0.014 256);
+  --sidebar-foreground: oklch(0.925 0.013 256);
+  --sidebar-primary: oklch(0.68 0.16 250);
+  --sidebar-primary-foreground: oklch(0.145 0.014 256);
+  --sidebar-accent: oklch(0.24 0.012 256);
+  --sidebar-accent-foreground: oklch(0.925 0.013 256);
+  --sidebar-border: oklch(0.30 0.01 256);
+  --sidebar-ring: oklch(0.68 0.16 250);
+
+  /* Custom semantic colors */
+  --success: oklch(0.62 0.19 145);         /* #3fb950 */
+  --success-foreground: oklch(0.145 0.014 256);
+  --warning: oklch(0.66 0.15 70);          /* #d29922 */
+  --warning-foreground: oklch(0.145 0.014 256);
+  --purple: oklch(0.72 0.16 295);          /* #bc8cff */
+  --purple-foreground: oklch(0.145 0.014 256);
+  --orange: oklch(0.63 0.14 60);           /* #d18616 */
+  --orange-foreground: oklch(0.145 0.014 256);
+  --dim: oklch(0.52 0.008 256);            /* #6e7681 (--text3 equivalent) */
+
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Custom semantic colors */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-purple: var(--purple);
+  --color-purple-foreground: var(--purple-foreground);
+  --color-orange: var(--orange);
+  --color-orange-foreground: var(--orange-foreground);
+  --color-dim: var(--dim);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Monospace font */
+  --font-mono: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* ── Custom CSS that cannot be achieved with shadcn/Tailwind ──────── */
+
+/*
+ * LINE CHART TOOLTIP: Positioned absolutely over an SVG viewBox.
+ * Tracks mouse position on SVG hit-area rects (not DOM elements),
+ * so shadcn Tooltip cannot be used — it requires a Trigger element.
+ */
+.line-chart-tooltip {
+  position: absolute;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.line-chart-tooltip.visible {
+  opacity: 1;
+}
+
+/*
+ * JOB CHEVRON ROTATION: Rotates 90deg on expand with transition.
+ * Tailwind has rotate-90 but cannot combine conditional class toggle
+ * with a smooth transition on the transform property.
+ */
+.job-chevron {
+  display: inline-block;
+  transition: transform 0.2s ease;
+  font-size: 12px;
+}
+.job-chevron.open {
+  transform: rotate(90deg);
+}
+
+/*
+ * CONTEXT ROW INDICATORS: Left-border on td:first-child inside a row class.
+ * Tailwind cannot target "first td descendant of a parent utility class"
+ * without @apply hacks. This is a known Tailwind limitation with table
+ * cell pseudo-selectors.
+ */
+.ctx-row-low :global(td:first-child) {
+  border-left: 3px solid var(--destructive);
+}
+.ctx-row-stale :global(td:first-child) {
+  border-left: 3px solid var(--warning);
+}

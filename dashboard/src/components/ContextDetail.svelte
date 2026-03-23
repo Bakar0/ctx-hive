@@ -60,12 +60,12 @@
 </script>
 
 <Dialog.Root open={contextId != null} onOpenChange={(open) => { if (!open) onClose(); }}>
-  <Dialog.Content class="max-w-3xl sm:max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
+  <Dialog.Content class="max-w-3xl sm:max-w-3xl max-h-[85vh] flex flex-col overflow-hidden p-0 gap-0">
     {#if context}
-      <Dialog.Header class="sticky top-0 z-10 bg-card border-b pb-3 shrink-0">
+      <Dialog.Header class="sticky top-0 z-10 bg-card border-b p-4 pb-3 shrink-0">
         <Dialog.Title>{context.title}</Dialog.Title>
       </Dialog.Header>
-      <div class="flex-1 overflow-y-auto py-4">
+      <div class="flex-1 overflow-y-auto px-4 py-4">
       <div class="flex gap-3 flex-wrap mb-4">
         <Badge variant={context.scope} />
         <span class="font-mono text-xs">{context.project || "\u2014"}</span>
@@ -141,7 +141,7 @@
       {/if}
 
       </div>
-      <Dialog.Footer class="sticky bottom-0 shrink-0 border-t bg-card">
+      <Dialog.Footer class="sticky bottom-0 shrink-0 mx-0 mb-0 rounded-b-xl border-t bg-card p-4 pt-3">
         <Button variant="outline" size="sm" onclick={() => navigator.clipboard.writeText(context!.id)}>Copy ID</Button>
         <Button variant="destructive" size="sm" onclick={() => handleDelete(context!.id)}>Delete</Button>
         <Dialog.Close>

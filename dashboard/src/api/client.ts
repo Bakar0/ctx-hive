@@ -6,6 +6,7 @@ import type {
   DiscoveredRepo,
   SearchRecord,
   SearchStats,
+  SessionSummary,
   TrackedRepo,
 } from "./types";
 
@@ -91,6 +92,21 @@ export function getSearchHistory(params?: {
 
 export function getSearchStats(): Promise<SearchStats> {
   return get("/api/search-stats");
+}
+
+// ── Sessions ────────────────────────────────────────────────────────
+
+export function getSessions(params?: {
+  project?: string;
+  since?: string;
+  limit?: number;
+}): Promise<SessionSummary[]> {
+  const sp = new URLSearchParams();
+  if (params?.project != null && params.project !== "") sp.set("project", params.project);
+  if (params?.since != null && params.since !== "") sp.set("since", params.since);
+  if (params?.limit != null) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return get(`/api/sessions${qs !== "" ? `?${qs}` : ""}`);
 }
 
 // ── Repos ────────────────────────────────────────────────────────────

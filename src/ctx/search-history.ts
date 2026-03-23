@@ -83,6 +83,29 @@ export async function loadSearchHistory(opts?: {
   return records;
 }
 
+// ── Session entries ──────────────────────────────────────────────────────
+
+/**
+ * Get deduplicated entries that were injected in a specific session.
+ * Returns the highest-scoring version of each entry.
+ */
+export async function getSessionEntries(
+  sessionId: string,
+): Promise<{ id: string; title: string; score: number }[]> {
+  const records = await loadSearchHistory();
+  const seen = new Map<string, { id: string; title: string; score: number }>();
+  for (const r of records) {
+    if (r.sessionId !== sessionId || r.source !== "inject") continue;
+    for (const result of r.results) {
+      const existing = seen.get(result.id);
+      if (existing === undefined || result.score > existing.score) {
+        seen.set(result.id, result);
+      }
+    }
+  }
+  return [...seen.values()];
+}
+
 // ── Stats ──────────────────────────────────────────────────────────────
 
 export async function getSearchStats(): Promise<SearchStats> {

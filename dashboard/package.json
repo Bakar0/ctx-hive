@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "@internationalized/date": "^3.12.0",
+    "@tailwindcss/typography": "^0.5",
     "@lucide/svelte": "^0.577.0",
     "@sveltejs/vite-plugin-svelte": "^5",
     "@tailwindcss/vite": "^4",
@@ -24,6 +25,7 @@
   "dependencies": {
     "bits-ui": "^2.16.3",
     "clsx": "^2",
+    "marked": "^15",
     "tailwind-merge": "^3"
   }
 }

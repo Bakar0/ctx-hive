@@ -19,7 +19,7 @@
   let statusFilter = $state("");
   let projectFilter = $state("");
   let page = $state(1);
-  let expandedIdx = $state<number | null>(null);
+  let expandedId = $state<string | null>(null);
   const pageSize = 20;
 
   let filtered = $derived.by(() => {
@@ -39,12 +39,11 @@
   export async function fetchJobs() {
     try {
       allJobs = await api.getJobs();
-      expandedIdx = null;
     } catch { /* silent */ }
   }
 
-  function toggle(idx: number) {
-    expandedIdx = expandedIdx === idx ? null : idx;
+  function toggle(id: string) {
+    expandedId = expandedId === id ? null : id;
   }
 
   async function rerun(filename: string) {
@@ -110,13 +109,12 @@
           <Table.Cell colspan={6} class="text-center text-muted-foreground py-8">No jobs found</Table.Cell>
         </Table.Row>
       {:else}
-        {#each pageItems as j, i}
-          {@const idx = (page - 1) * pageSize + i}
+        {#each pageItems as j (j.filename)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-          <Table.Row class="cursor-pointer {expandedIdx === idx ? 'bg-primary/4' : ''}" onclick={() => toggle(idx)}>
+          <Table.Row class="cursor-pointer {expandedId === j.filename ? 'bg-primary/4' : ''}" onclick={() => toggle(j.filename)}>
             <Table.Cell class="w-8 text-center">
-              <span class="job-chevron" class:open={expandedIdx === idx}>&#x25B8;</span>
+              <span class="job-chevron" class:open={expandedId === j.filename}>&#x25B8;</span>
             </Table.Cell>
             <Table.Cell>
               <Badge variant={j.status} pulse={j.status === "processing"} />
@@ -142,7 +140,7 @@
             </Table.Cell>
           </Table.Row>
 
-          {#if expandedIdx === idx}
+          {#if expandedId === j.filename}
             <Table.Row class="hover:bg-transparent">
               <Table.Cell colspan={6} class="!p-0">
                 <div class="p-4 pl-12 pb-5 bg-background border-t border-border">

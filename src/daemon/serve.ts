@@ -22,7 +22,7 @@ import { handleApiRequest } from "./api.ts";
 import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
 import { loadTrackedRepos } from "../repo/tracking.ts";
 import { recomputeAllScores } from "../ctx/signals.ts";
-import dashboardHtmlContent from "./dashboard.html" with { type: "text" };
+import dashboardHtmlContent from "../../dashboard/dist/index.html" with { type: "text" };
 
 // ── Constants ─────────────────────────────────────────────────────────
 

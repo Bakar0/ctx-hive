@@ -348,27 +348,69 @@ function existingEntriesBlock(existing: IndexEntry[], isUpdate: boolean): string
   }`;
 }
 
-function buildEvaluationBlock(servedEntries: ServedEntry[]): string {
+function servedEntriesDedupBlock(servedEntries: ServedEntry[]): string {
   if (servedEntries.length === 0) return "";
 
   const entryList = servedEntries
     .map((e) => `- id: ${e.id} — "${e.title}"`)
     .join("\n");
 
-  return `## Additional Task: Evaluate Previously-Served Context
+  return `## Previously-Served Context (do NOT duplicate)
 
-The following context entries were served to this session via ctx-hive search:
+The following entries were already served to this session. Do NOT create new entries that cover the same topics:
+${entryList}
+`;
+}
+
+/**
+ * Build a focused prompt for the Evaluator agent.
+ * This agent only evaluates previously-served context entries — no mining.
+ */
+export function buildEvaluationPrompt(
+  meta: RepoMeta,
+  sessionPaths: string[],
+  servedEntries: ServedEntry[],
+): string {
+  const fileList = sessionPaths.map((p) => `- ${p}`).join("\n");
+  const entryList = servedEntries
+    .map((e) => `- id: ${e.id} — "${e.title}"`)
+    .join("\n");
+
+  return `# Context Evaluator: ${meta.name}
+
+You are evaluating whether previously-served context entries were useful in a Claude Code session.
+
+## Session files (JSONL format)
+
+${fileList}
+
+## JSONL format
+
+Each line is a JSON object. Relevant message types:
+- \`{"type": "human", "message": {"content": "..."}}\` — user messages
+- \`{"type": "assistant", "message": {"content": [...]}}\` — assistant messages (content is an array of blocks, look for \`type: "text"\`)
+
+## Entries to evaluate
+
+You MUST evaluate every entry listed below. Do not skip any.
+
 ${entryList}
 
-For each entry, evaluate whether it was useful in the session:
+## How to evaluate
+
+For each entry, read through the session transcript and determine:
 1. Was the entry referenced or acted upon?
 2. Did it influence a decision or prevent a mistake?
 3. Was it ignored or irrelevant to what the session was doing?
 
-Report your evaluation for each entry by running:
+## How to report
+
+For each entry, run this command:
 \`\`\`
-ctx-hive evaluate --entry-id <id> --session-id <session-id> --rating <-1|0|1|2> --reason "brief reason"
+ctx-hive evaluate --entry-id <id> --session-id <session-id> --rating <rating> --reason "brief reason"
 \`\`\`
+
+Use the session ID from the transcript filename (without the .jsonl extension).
 
 Rating scale:
 - **-1**: Entry was counterproductive (outdated, misleading, or caused confusion)
@@ -376,8 +418,11 @@ Rating scale:
 - **1**: Entry was referenced or acknowledged
 - **2**: Entry was heavily relied upon or prevented a mistake
 
-Do this BEFORE extracting new insights. Use the session ID from the transcript filename (without the .jsonl extension).
-`;
+## Rules
+- Evaluate ALL ${servedEntries.length} entries — this is your only task
+- Read the session transcript to understand what work was done
+- Be honest in ratings — a 0 for irrelevant entries is perfectly fine
+- Start by reading the first ~200 and last ~100 lines of the session to understand its purpose, then evaluate each entry`;
 }
 
 function ctxAddInstructions(meta: RepoMeta, isUpdate: boolean): string {
@@ -579,7 +624,7 @@ ${existingEntriesBlock(existing, isUpdate)}
 
 ${ctxAddInstructions(meta, isUpdate)}
 
-${buildEvaluationBlock(servedEntries)}
+${servedEntriesDedupBlock(servedEntries)}
 Now read the session files and generate context entries. Remember: only things an AI couldn't figure out by reading the code.`;
 }
 

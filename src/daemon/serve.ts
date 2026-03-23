@@ -83,54 +83,56 @@ async function processJob(jobPath: string): Promise<void> {
     job = await readJob(jobPath);
   } catch (err) {
     log("error", `failed to read job ${jobPath}: ${errorMessage(err)}`);
-    await failJob(jobPath, "malformed job file");
+    try { await failJob(jobPath, "malformed job file"); } catch { /* file already gone */ }
     return;
   }
 
-  const handler = getHandler(job.type);
-  if (!handler) {
-    log("error", `no handler for job type: ${job.type}`);
-    await failJob(jobPath, `unknown job type: ${job.type}`);
-    return;
-  }
-
-  // Tracked repo filter — skip jobs from untracked repos
-  const repoPath = "repoPath" in job ? job.repoPath : ("cwd" in job ? job.cwd : undefined);
-  if (repoPath != null && repoPath !== "") {
-    const trackedRepos = await loadTrackedRepos();
-    const normalized = resolve(repoPath);
-    if (!trackedRepos.some((r) => r.absPath === normalized)) {
-      log("info", `skipping job for untracked repo: ${repoPath}`);
-      await moveJob(jobPath, DONE_DIR);
-      return;
-    }
-  }
-
-  // Duplicate check for session-mine jobs
-  if (job.type === "session-mine") {
-    if (await isDuplicate(job.sessionId)) {
-      log("info", `skipping duplicate session: ${job.sessionId.slice(0, 8)}`);
-      await moveJob(jobPath, DONE_DIR);
-      return;
-    }
-  }
-
-  // Duplicate check for git jobs (SHA-based)
-  if (job.type === "git-push" || job.type === "git-pull") {
-    if (job.headSha !== "" && await isGitJobProcessed(job.headSha, job.repoPath)) {
-      log("info", `skipping already-processed commit: ${job.headSha.slice(0, 8)} in ${job.repoPath}`);
-      await moveJob(jobPath, DONE_DIR);
-      return;
-    }
-  }
-
-  // Move to processing and stamp start time
-  const processingPath = await moveJob(jobPath, PROCESSING_DIR);
-  await stampStarted(processingPath);
-  log("info", `processing: ${job.type} (${jobPath})`);
-  broadcastJobEvent("job:started", job);
+  let processingPath: string | undefined;
 
   try {
+    const handler = getHandler(job.type);
+    if (!handler) {
+      log("error", `no handler for job type: ${job.type}`);
+      await failJob(jobPath, `unknown job type: ${job.type}`);
+      return;
+    }
+
+    // Tracked repo filter — skip jobs from untracked repos
+    const repoPath = "repoPath" in job ? job.repoPath : ("cwd" in job ? job.cwd : undefined);
+    if (repoPath != null && repoPath !== "") {
+      const trackedRepos = await loadTrackedRepos();
+      const normalized = resolve(repoPath);
+      if (!trackedRepos.some((r) => r.absPath === normalized)) {
+        log("info", `skipping job for untracked repo: ${repoPath}`);
+        await moveJob(jobPath, DONE_DIR);
+        return;
+      }
+    }
+
+    // Duplicate check for session-mine jobs
+    if (job.type === "session-mine") {
+      if (await isDuplicate(job.sessionId)) {
+        log("info", `skipping duplicate session: ${job.sessionId.slice(0, 8)}`);
+        await moveJob(jobPath, DONE_DIR);
+        return;
+      }
+    }
+
+    // Duplicate check for git jobs (SHA-based)
+    if (job.type === "git-push" || job.type === "git-pull") {
+      if (job.headSha !== "" && await isGitJobProcessed(job.headSha, job.repoPath)) {
+        log("info", `skipping already-processed commit: ${job.headSha.slice(0, 8)} in ${job.repoPath}`);
+        await moveJob(jobPath, DONE_DIR);
+        return;
+      }
+    }
+
+    // Move to processing and stamp start time
+    processingPath = await moveJob(jobPath, PROCESSING_DIR);
+    await stampStarted(processingPath);
+    log("info", `processing: ${job.type} (${jobPath})`);
+    broadcastJobEvent("job:started", job);
+
     const result = await handler(job);
     if (result.success) {
       await completeJob(processingPath, result);
@@ -143,8 +145,8 @@ async function processJob(jobPath: string): Promise<void> {
     }
   } catch (err) {
     const msg = errorMessage(err);
-    await failJob(processingPath, msg);
-    log("error", `failed: ${job.type} — ${msg}`);
+    log("error", `job processing error for ${job.type} (${jobPath}): ${msg}`);
+    try { await failJob(processingPath ?? jobPath, msg); } catch { /* best-effort */ }
     broadcastJobEvent("job:failed", job);
   }
 }
@@ -164,9 +166,13 @@ async function drainPending(): Promise<void> {
       }
       if (shuttingDown) break;
 
-      const jobPromise = processJob(jobPath).finally(() => {
-        inFlightJobs.delete(jobPromise);
-      });
+      const jobPromise = processJob(jobPath)
+        .catch((err) => {
+          log("error", `unexpected job error: ${errorMessage(err)}`);
+        })
+        .finally(() => {
+          inFlightJobs.delete(jobPromise);
+        });
       inFlightJobs.add(jobPromise);
     }
   } finally {
@@ -180,7 +186,11 @@ async function recoverOrphans(): Promise<void> {
   const orphans = await listJobs(PROCESSING_DIR);
   for (const path of orphans) {
     log("warn", `recovering orphaned job: ${path}`);
-    await moveJob(path, PENDING_DIR);
+    try {
+      await moveJob(path, PENDING_DIR);
+    } catch (err) {
+      log("error", `failed to recover orphan ${path}: ${errorMessage(err)}`);
+    }
   }
 }
 
@@ -287,6 +297,12 @@ export async function serve(args: string[]): Promise<void> {
 
   process.on("SIGINT", () => void shutdown().then(() => process.exit(0)));
   process.on("SIGTERM", () => void shutdown().then(() => process.exit(0)));
+  process.on("uncaughtException", (err) => {
+    log("error", `uncaught exception: ${errorMessage(err)}`);
+  });
+  process.on("unhandledRejection", (reason) => {
+    log("error", `unhandled rejection: ${errorMessage(reason)}`);
+  });
 
   log("info", `daemon started (pid ${process.pid}, concurrency ${maxConcurrency}), watching ${PENDING_DIR}`);
 
@@ -295,13 +311,25 @@ export async function serve(args: string[]): Promise<void> {
   startMetricsBroadcast(5_000);
 
   // Recover orphaned jobs from previous crash
-  await recoverOrphans();
+  try {
+    await recoverOrphans();
+  } catch (err) {
+    log("error", `orphan recovery failed: ${errorMessage(err)}`);
+  }
 
   // Recompute signal scores and prune stale data
-  await recomputeAllScores();
+  try {
+    await recomputeAllScores();
+  } catch (err) {
+    log("error", `score recomputation failed: ${errorMessage(err)}`);
+  }
 
   // Drain any pending jobs that accumulated while daemon was down
-  await drainPending();
+  try {
+    await drainPending();
+  } catch (err) {
+    log("error", `initial drain failed: ${errorMessage(err)}`);
+  }
 
   // Watch for new jobs
   watcher = watch(PENDING_DIR, () => {

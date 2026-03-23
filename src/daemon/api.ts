@@ -238,6 +238,114 @@ export async function deleteContextById(idOrSlug: string): Promise<boolean> {
   return true;
 }
 
+// ── Session summaries ────────────────────────────────────────────────
+
+export interface SessionServedEntry {
+  id: string;
+  title: string;
+  maxScore: number;
+  rating?: -1 | 0 | 1 | 2;
+  reason?: string;
+}
+
+export interface SessionSummary {
+  sessionId: string;
+  project: string;
+  firstSeen: string;
+  lastSeen: string;
+  injectionCount: number;
+  servedEntries: SessionServedEntry[];
+  evaluationComplete: boolean;
+}
+
+export async function getSessionSummaries(opts?: {
+  project?: string;
+  since?: Date;
+  limit?: number;
+}): Promise<SessionSummary[]> {
+  const records = await loadSearchHistory();
+  const signals = await loadSignals();
+
+  // Group inject records by sessionId
+  const sessionMap = new Map<string, {
+    project: string;
+    firstSeen: string;
+    lastSeen: string;
+    injectionCount: number;
+    entries: Map<string, { id: string; title: string; maxScore: number }>;
+  }>();
+
+  for (const r of records) {
+    if (r.source !== "inject" || r.sessionId === undefined || r.sessionId === "") continue;
+    if (opts?.since !== undefined && new Date(r.timestamp).getTime() < opts.since.getTime()) continue;
+    if (opts?.project !== undefined && r.project !== opts.project) continue;
+
+    let session = sessionMap.get(r.sessionId);
+    if (session === undefined) {
+      session = {
+        project: r.project ?? "unknown",
+        firstSeen: r.timestamp,
+        lastSeen: r.timestamp,
+        injectionCount: 0,
+        entries: new Map(),
+      };
+      sessionMap.set(r.sessionId, session);
+    }
+
+    session.injectionCount++;
+    if (r.timestamp < session.firstSeen) session.firstSeen = r.timestamp;
+    if (r.timestamp > session.lastSeen) session.lastSeen = r.timestamp;
+
+    for (const result of r.results) {
+      const existing = session.entries.get(result.id);
+      if (existing === undefined || result.score > existing.maxScore) {
+        session.entries.set(result.id, { id: result.id, title: result.title, maxScore: result.score });
+      }
+    }
+  }
+
+  // Build summaries with evaluation data from signals
+  const summaries: SessionSummary[] = [];
+
+  for (const [sessionId, session] of sessionMap) {
+    const servedEntries: SessionServedEntry[] = [];
+    let allEvaluated = true;
+
+    for (const entry of session.entries.values()) {
+      const entrySignals = signals.entries[entry.id];
+      const evaluation = entrySignals?.evaluations.find((ev) => ev.sessionId === sessionId);
+      if (evaluation === undefined) allEvaluated = false;
+
+      servedEntries.push({
+        id: entry.id,
+        title: entry.title,
+        maxScore: entry.maxScore,
+        rating: evaluation?.rating,
+        reason: evaluation?.reason,
+      });
+    }
+
+    summaries.push({
+      sessionId,
+      project: session.project,
+      firstSeen: session.firstSeen,
+      lastSeen: session.lastSeen,
+      injectionCount: session.injectionCount,
+      servedEntries,
+      evaluationComplete: servedEntries.length > 0 && allEvaluated,
+    });
+  }
+
+  // Sort by lastSeen descending (newest first)
+  summaries.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+
+  if (opts?.limit !== undefined && opts.limit > 0) {
+    return summaries.slice(0, opts.limit);
+  }
+
+  return summaries;
+}
+
 // ── Router ────────────────────────────────────────────────────────────
 
 function json(data: unknown, status = 200): Response {
@@ -334,7 +442,10 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const limit = parseInt(url.searchParams.get("limit") ?? "5", 10);
     const validScope = scope !== undefined && isScope(scope) ? scope : undefined;
     const filters: SearchFilters = { scope: validScope, tags, project };
-    const results = await search(q, filters, limit, { source: "api" });
+    const rawSource = url.searchParams.get("source");
+    const source = rawSource === "inject" ? "inject" as const : rawSource === "cli" ? "cli" as const : "api" as const;
+    const sessionId = url.searchParams.get("sessionId") ?? undefined;
+    const results = await search(q, filters, limit, { source, sessionId, project });
     return json({ query: q, results });
   }
 
@@ -350,6 +461,18 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // GET /api/search-stats
   if (path === "/api/search-stats" && req.method === "GET") {
     return json(await getSearchStats());
+  }
+
+  // ── Session endpoints ──────────────────────────────────────────────────
+
+  // GET /api/sessions?project=...&since=...&limit=...
+  if (path === "/api/sessions" && req.method === "GET") {
+    const projectFilter = url.searchParams.get("project") ?? undefined;
+    const sinceParam = url.searchParams.get("since");
+    const limitParam = url.searchParams.get("limit");
+    const since = sinceParam !== null && sinceParam !== "" ? new Date(sinceParam) : undefined;
+    const limit = limitParam !== null && limitParam !== "" ? parseInt(limitParam, 10) : undefined;
+    return json(await getSessionSummaries({ project: projectFilter, since, limit }));
   }
 
   // ── Repo endpoints ───────────────────────────────────────────────────

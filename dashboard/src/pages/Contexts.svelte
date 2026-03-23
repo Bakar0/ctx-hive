@@ -204,7 +204,7 @@
         {#if filtered.length === 0}
           <Table.Row><Table.Cell colspan={8} class="text-center text-muted-foreground py-8">No contexts match filters</Table.Cell></Table.Row>
         {:else}
-          {#each pageItems as c}
+          {#each pageItems as c (c.id)}
             {@const sig = allSignals[c.id]}
             {@const tier = scoreTier(c.id)}
             {@const stale = isStale(c)}

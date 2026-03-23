@@ -1,8 +1,9 @@
 import { join } from "node:path";
-import { resolveRepoMeta, buildSessionPrompt, buildGitChangePrompt, buildRepoPrompt, gatherRepoContext, type GitChangeDetails, type ServedEntry } from "../ctx/init.ts";
+import { resolveRepoMeta, buildSessionPrompt, buildEvaluationPrompt, buildGitChangePrompt, buildRepoPrompt, gatherRepoContext, type GitChangeDetails, type ServedEntry } from "../ctx/init.ts";
 import { loadIndex, hiveRoot, type IndexEntry } from "../ctx/store.ts";
 import { extractServedEntries } from "../ctx/sessions.ts";
-import { runSingle } from "../adapter/pipeline.ts";
+import { getSessionEntries } from "../ctx/search-history.ts";
+import { runSingle, runParallel, type PipelineTask } from "../adapter/pipeline.ts";
 import { runGit } from "../git/run.ts";
 import type { Job, JobResult } from "./jobs.ts";
 
@@ -129,24 +130,101 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
   );
   const isUpdate = existing.length > 0;
 
-  // Find entry IDs that were served in this session's search results
-  const servedIds = await extractServedEntries(transcriptPath);
-  const servedEntries: ServedEntry[] = servedIds
-    .map((id) => {
-      const entry = index.find((e) => e.id === id);
-      return entry !== undefined ? { id, title: entry.title } : null;
-    })
-    .filter((e): e is ServedEntry => e !== null);
+  // Find entries that were served in this session — try search-history first, fallback to transcript regex
+  const historyEntries = await getSessionEntries(job.sessionId);
+  let servedEntries: ServedEntry[];
 
-  const prompt = buildSessionPrompt(meta, [transcriptPath], existing, isUpdate, servedEntries);
+  if (historyEntries.length > 0) {
+    servedEntries = historyEntries
+      .map((e) => {
+        const entry = index.find((ie) => ie.id === e.id);
+        return entry !== undefined ? { id: e.id, title: entry.title } : null;
+      })
+      .filter((e): e is ServedEntry => e !== null);
+  } else {
+    // Fallback: regex scan transcript (backward compat for sessions before this change)
+    const servedIds = await extractServedEntries(transcriptPath);
+    servedEntries = servedIds
+      .map((id) => {
+        const entry = index.find((e) => e.id === id);
+        return entry !== undefined ? { id, title: entry.title } : null;
+      })
+      .filter((e): e is ServedEntry => e !== null);
+  }
 
-  return runAgentAndCollect(
-    `daemon-session-mine-${meta.name}`,
-    prompt,
-    cwd,
-    index,
-    { transcriptTokens },
-  );
+  const start = Date.now();
+  const countBefore = index.length;
+
+  // Build tasks: always mine, evaluate only if there are served entries
+  const tasks: PipelineTask<unknown>[] = [];
+
+  tasks.push({
+    name: `daemon-session-mine-${meta.name}`,
+    options: {
+      name: `daemon-session-mine-${meta.name}`,
+      prompt: buildSessionPrompt(meta, [transcriptPath], existing, isUpdate, servedEntries),
+      cwd,
+      model: AGENT_MODEL,
+      allowedTools: AGENT_TOOLS,
+      logsDir: LOGS_DIR,
+    },
+  });
+
+  if (servedEntries.length > 0) {
+    tasks.push({
+      name: `daemon-session-eval-${meta.name}`,
+      options: {
+        name: `daemon-session-eval-${meta.name}`,
+        prompt: buildEvaluationPrompt(meta, [transcriptPath], servedEntries),
+        cwd,
+        model: AGENT_MODEL,
+        allowedTools: ["Bash", "Read"],
+        logsDir: LOGS_DIR,
+      },
+    });
+  }
+
+  const phase = await runParallel(tasks);
+
+  const countAfter = (await loadIndex()).length;
+  const entriesCreated = Math.max(0, countAfter - countBefore);
+  const duration_ms = Date.now() - start;
+
+  // Sum token usage across all agents
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let hasError = false;
+  let errorMsg: string | undefined;
+
+  for (const r of phase.results) {
+    inputTokens += r.inputTokens ?? 0;
+    outputTokens += r.outputTokens ?? 0;
+    if (r.error != null && r.error !== "") {
+      hasError = true;
+      errorMsg = r.error;
+    }
+  }
+
+  if (hasError) {
+    return {
+      success: false,
+      error: errorMsg,
+      duration_ms,
+      entriesCreated,
+      inputTokens,
+      outputTokens,
+      transcriptTokens,
+    };
+  }
+
+  return {
+    success: true,
+    duration_ms,
+    entriesCreated,
+    inputTokens,
+    outputTokens,
+    transcriptTokens,
+  };
 }
 
 // ── Git change handler ───────────────────────────────────────────────

@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { appendFile } from "node:fs/promises";
 import { z } from "zod";
 import { search, tokenize, type SearchResult } from "../ctx/search.ts";
-import { appendSearchRecord } from "../ctx/search-history.ts";
+
 import { hiveRoot } from "../ctx/store.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -55,10 +55,12 @@ function formatInjectResult(results: SearchResult[]): string {
 async function tryDaemonSearch(
   query: string,
   project?: string,
+  sessionId?: string,
 ): Promise<SearchResult[] | null> {
   try {
-    const params = new URLSearchParams({ q: query, limit: String(MAX_RESULTS) });
+    const params = new URLSearchParams({ q: query, limit: String(MAX_RESULTS), source: "inject" });
     if (project !== undefined && project !== "") params.set("project", project);
+    if (sessionId !== undefined && sessionId !== "") params.set("sessionId", sessionId);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DAEMON_TIMEOUT_MS);
@@ -137,28 +139,13 @@ export async function handleInject(): Promise<void> {
     const sessionId = payload.session_id;
 
     // Try daemon first, fall back to direct search
-    let results = await tryDaemonSearch(promptText, project);
-    if (results === null) {
-      results = await search(promptText, { project }, MAX_RESULTS, {
-        source: "inject",
-        project,
-        cwd: payload.cwd,
-        sessionId,
-      });
-    } else {
-      // Daemon search doesn't record to history, so record here
-      void appendSearchRecord({
-        timestamp: new Date().toISOString(),
-        source: "inject",
-        query: promptText,
-        project,
-        cwd: payload.cwd,
-        sessionId,
-        resultCount: results.length,
-        results: results.map((r) => ({ id: r.id, title: r.title, score: r.score })),
-        durationMs: 0, // daemon handled timing
-      });
-    }
+    let results = await tryDaemonSearch(promptText, project, sessionId);
+    results ??= await search(promptText, { project }, MAX_RESULTS, {
+      source: "inject",
+      project,
+      cwd: payload.cwd,
+      sessionId,
+    });
 
     // Filter by minimum score threshold
     results = results.filter((r) => r.score >= MIN_SCORE_THRESHOLD);

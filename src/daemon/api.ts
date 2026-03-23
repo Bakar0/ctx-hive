@@ -32,7 +32,7 @@ import {
 } from "../repo/tracking.ts";
 import { loadSignals } from "../ctx/signals.ts";
 import { search, type SearchFilters } from "../ctx/search.ts";
-import { loadSearchHistory, getSearchStats } from "../ctx/search-history.ts";
+import { loadSearchHistory, getSearchStats, type SearchSource } from "../ctx/search-history.ts";
 import {
   discoverRepos,
   enrichTrackedRepos,
@@ -334,7 +334,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const limit = parseInt(url.searchParams.get("limit") ?? "5", 10);
     const validScope = scope !== undefined && isScope(scope) ? scope : undefined;
     const filters: SearchFilters = { scope: validScope, tags, project };
-    const results = await search(q, filters, limit, { source: "api" });
+    const rawSource = url.searchParams.get("source");
+    const source: SearchSource = rawSource === "inject" ? "inject" : rawSource === "cli" ? "cli" : "api";
+    const results = await search(q, filters, limit, { source });
     return json({ query: q, results });
   }
 

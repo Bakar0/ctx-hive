@@ -5,6 +5,7 @@
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { timeAgo } from "../format/time";
   import { formatCompact } from "../format/numbers";
+  import { renderMarkdown } from "../format/markdown";
   import * as api from "../api/client";
   import type { ContextEntry, EntrySignals } from "../api/types";
 
@@ -18,6 +19,8 @@
 
   let context = $state<ContextEntry | null>(null);
   let signals = $state<EntrySignals | null>(null);
+  let viewMode = $state<"preview" | "raw">("preview");
+  let renderedHtml = $derived(context ? renderMarkdown(context.body) : "");
 
   $effect(() => {
     if (contextId == null) {
@@ -25,6 +28,7 @@
       signals = null;
       return;
     }
+    viewMode = "preview";
     const id = contextId;
     void (async () => {
       try {
@@ -73,22 +77,21 @@
         {#if context.tokens > 0}<span class="font-mono text-xs text-muted-foreground">{formatCompact(context.tokens)} tokens</span>{/if}
       </div>
 
-      {#if signals}
-        <div class="flex gap-4 mb-4 flex-wrap">
+      <div class="flex gap-4 mb-4 flex-wrap">
           <div class="flex flex-col items-center px-3 py-2 bg-background border rounded-md min-w-20">
-            <span class="text-lg font-bold font-mono" style="color:{scoreBarColor(signals.score)}">{signals.score.toFixed(2)}</span>
+            <span class="text-lg font-bold font-mono" style="color:{scoreBarColor(signals?.score ?? 0)}">{(signals?.score ?? 0).toFixed(2)}</span>
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">Score</span>
           </div>
           <div class="flex flex-col items-center px-3 py-2 bg-background border rounded-md min-w-20">
-            <span class="text-lg font-bold font-mono">{(signals.searchHits ?? []).reduce((s, b) => s + b.count, 0)}</span>
+            <span class="text-lg font-bold font-mono">{(signals?.searchHits ?? []).reduce((s, b) => s + b.count, 0)}</span>
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">Total Hits</span>
           </div>
           <div class="flex flex-col items-center px-3 py-2 bg-background border rounded-md min-w-20">
-            <span class="text-lg font-bold font-mono">{(signals.searchHits ?? []).filter(b => new Date(b.date).getTime() >= Date.now() - 30 * 86400000).reduce((s, b) => s + b.count, 0)}</span>
+            <span class="text-lg font-bold font-mono">{(signals?.searchHits ?? []).filter(b => new Date(b.date).getTime() >= Date.now() - 30 * 86400000).reduce((s, b) => s + b.count, 0)}</span>
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">30d Hits</span>
           </div>
           <div class="flex flex-col items-center px-3 py-2 bg-background border rounded-md min-w-20">
-            <span class="text-lg font-bold font-mono">{(signals.evaluations ?? []).length}</span>
+            <span class="text-lg font-bold font-mono">{(signals?.evaluations ?? []).length}</span>
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">Evals</span>
           </div>
           <div class="flex flex-col items-center px-3 py-2 bg-background border rounded-md min-w-20">
@@ -96,12 +99,29 @@
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">Days Old</span>
           </div>
         </div>
-        {#if signals.searchHits?.length}
-          <Sparkline hits={signals.searchHits} days={90} wide />
+        {#if signals?.searchHits?.length}
+          <div class="mt-1 mb-2">
+            <span class="text-[10px] text-dim uppercase tracking-wider">Search activity (90d)</span>
+            <Sparkline hits={signals.searchHits} days={90} wide />
+          </div>
         {/if}
-      {/if}
 
-      <div class="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words bg-background rounded-md p-4 border">{context.body}</div>
+      <div class="flex justify-end mb-2">
+        <div class="inline-flex rounded-lg border border-border overflow-hidden">
+          <button
+            class="px-2.5 py-1 text-xs font-medium transition-colors {viewMode === 'preview' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => viewMode = "preview"}
+          >Preview</button>
+          <button
+            class="px-2.5 py-1 text-xs font-medium transition-colors border-l border-border {viewMode === 'raw' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+            onclick={() => viewMode = "raw"}
+          >Raw</button>
+        </div>
+      </div>
+      <div class="grid [&>*]:col-start-1 [&>*]:row-start-1">
+        <div class="{viewMode !== 'raw' ? 'invisible' : ''} text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words bg-background rounded-md p-4 border">{context.body}</div>
+        <div class="{viewMode !== 'preview' ? 'invisible' : ''} text-sm bg-background rounded-md p-4 border prose prose-invert prose-sm max-w-none">{@html renderedHtml}</div>
+      </div>
 
       {#if signals}
         <div class="mt-4 p-4 bg-background border rounded-md">

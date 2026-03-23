@@ -25,6 +25,10 @@ bun run deploy                    # Build + copy to ~/.local/bin/
 - Text asset imports use `with { type: "text" }` (e.g., `import html from "./dashboard.html" with { type: "text" }`).
 - IMPORTANT: When spawning a Claude subprocess, delete `CLAUDECODE` from env to prevent recursive Claude Code invocation (see `src/adapter/claude.ts`).
 
+## Dashboard styling
+
+- Use Tailwind utility classes and shadcn-svelte components. Only write custom CSS as a last resort, and document why in a comment above the rule.
+
 ## Storage patterns
 
 - Entries are Markdown files with YAML frontmatter under `~/.ctx-hive/entries/{scope}/` (scopes: `project`, `org`, `personal`).

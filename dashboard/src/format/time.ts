@@ -8,6 +8,7 @@ export function timeAgo(iso: string | undefined): string {
 }
 
 export function formatDuration(ms: number): string {
+  if (ms < 1000) return Math.round(ms) + "ms";
   if (ms < 60000) return Math.floor(ms / 1000) + "s";
   if (ms < 3600000)
     return (

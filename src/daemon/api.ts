@@ -1,6 +1,6 @@
 /**
  * REST API endpoints for the ctx-hive dashboard.
- * Provides read access to jobs, contexts (entries), and metrics.
+ * Provides read access to jobs, contexts, pipelines, and metrics.
  */
 import { join, basename } from "node:path";
 import { unlink } from "node:fs/promises";
@@ -39,6 +39,8 @@ import {
 } from "../repo/scanner.ts";
 import { broadcastRepoEvent } from "./ws.ts";
 import { errorMessage } from "../git/run.ts";
+import { listExecutionIds, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
+import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -55,11 +57,12 @@ export interface JobView {
   failedAt?: string;
   startedAt?: string;
   completedAt?: string;
-  duration_ms?: number;
+  durationMs?: number;
   transcriptTokens?: number;
   entriesCreated?: number;
   inputTokens?: number;
   outputTokens?: number;
+  pipeline?: unknown;
 }
 
 export interface MetricsSnapshot {
@@ -134,15 +137,16 @@ async function loadJobsFromDir(
           cwd: data.cwd,
           project: projectFromCwd(data.cwd ?? data.repoPath),
           reason: data.reason,
-          error: data._error,
-          failedAt: data._failedAt,
-          startedAt: data._startedAt,
-          completedAt: data._completedAt,
-          duration_ms: data._duration_ms,
-          transcriptTokens: data._transcriptTokens,
-          entriesCreated: data._entriesCreated,
-          inputTokens: data._inputTokens,
-          outputTokens: data._outputTokens,
+          error: data.error,
+          failedAt: data.failedAt,
+          startedAt: data.startedAt,
+          completedAt: data.completedAt,
+          durationMs: data.durationMs,
+          transcriptTokens: data.transcriptTokens,
+          entriesCreated: data.entriesCreated,
+          inputTokens: data.inputTokens,
+          outputTokens: data.outputTokens,
+          pipeline: data.pipeline,
         };
       } catch {
         return null;
@@ -391,7 +395,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     if (!(await file.exists())) return json({ error: "Job not found in failed/" }, 404);
     const data: Record<string, unknown> = RawJobFileSchema.passthrough().parse(JSON.parse(await file.text()));
     // Strip processing metadata so the job is treated as fresh
-    for (const key of ["_error", "_failedAt", "_startedAt", "_completedAt", "_duration_ms", "_entriesCreated", "_inputTokens", "_outputTokens", "_transcriptTokens"]) {
+    for (const key of ["error", "failedAt", "startedAt", "completedAt", "durationMs", "entriesCreated", "inputTokens", "outputTokens", "transcriptTokens", "pipeline"]) {
       delete data[key];
     }
     await Bun.write(join(PENDING_DIR, filename), JSON.stringify(data, null, 2));
@@ -551,6 +555,119 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
     }
+  }
+
+  // ── Pipeline helpers ───────────────────────────────────────────────
+
+  function normalizeExecution(exec: PipelineExecution): PipelineExecution {
+    return {
+      ...exec,
+      stages: exec.stages.map((s) => ({ ...s, name: canonicalStageName(s.name) })),
+    };
+  }
+
+  // ── Pipeline endpoints ─────────────────────────────────────────────
+
+  // GET /api/pipelines?project=...&status=...&limit=...
+  if (path === "/api/pipelines" && req.method === "GET") {
+    const projectFilter = url.searchParams.get("project") ?? undefined;
+    const statusFilter = url.searchParams.get("status") ?? undefined;
+    const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
+
+    const executionIds = await listExecutionIds();
+    const executions: PipelineExecution[] = [];
+
+    for (const id of executionIds) {
+      try {
+        const manifest = await readManifest(id);
+        const execution = normalizeExecution(PipelineExecutionSchema.parse(manifest));
+        if (projectFilter !== undefined && execution.project !== projectFilter) continue;
+        if (statusFilter !== undefined && execution.status !== statusFilter) continue;
+        executions.push(execution);
+      } catch {
+        // skip malformed manifests
+      }
+    }
+
+    // Sort by startedAt descending
+    executions.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return json(executions.slice(0, limit));
+  }
+
+  // GET /api/pipelines/:executionId
+  const pipelineMatch = /^\/api\/pipelines\/([^/]+)$/.exec(path);
+  if (pipelineMatch && req.method === "GET") {
+    const executionId = decodeURIComponent(pipelineMatch[1]!);
+    try {
+      const manifest = await readManifest(executionId);
+      return json(normalizeExecution(PipelineExecutionSchema.parse(manifest)));
+    } catch {
+      return json({ error: "Not found" }, 404);
+    }
+  }
+
+  // GET /api/pipelines/:executionId/messages/:stageName
+  const messageMatch = /^\/api\/pipelines\/([^/]+)\/messages\/([^/]+)$/.exec(path);
+  if (messageMatch && req.method === "GET") {
+    const executionId = decodeURIComponent(messageMatch[1]!);
+    const stageName = decodeURIComponent(messageMatch[2]!);
+    try {
+      const data = await readMessage(executionId, stageName);
+      return json(data);
+    } catch {
+      return json({ error: "Not found" }, 404);
+    }
+  }
+
+  // GET /api/pipeline-stats
+  if (path === "/api/pipeline-stats" && req.method === "GET") {
+    const executionIds = await listExecutionIds();
+    const stageDurations: Record<string, number[]> = {};
+    const stageFailures: Record<string, { total: number; failed: number }> = {};
+    let completed = 0;
+    let failed = 0;
+    let total = 0;
+
+    for (const id of executionIds) {
+      try {
+        const manifest = await readManifest(id);
+        const execution = PipelineExecutionSchema.parse(manifest);
+        total++;
+        if (execution.status === "completed") completed++;
+        if (execution.status === "failed") failed++;
+
+        for (const stage of execution.stages) {
+          const name = canonicalStageName(stage.name);
+          if (stage.durationMs !== undefined) {
+            (stageDurations[name] ??= []).push(stage.durationMs);
+          }
+          const s = (stageFailures[name] ??= { total: 0, failed: 0 });
+          s.total++;
+          if (stage.status === "failed") s.failed++;
+        }
+      } catch {
+        // skip
+      }
+    }
+
+    const avgStageDurations: Record<string, number> = {};
+    for (const [name, durations] of Object.entries(stageDurations)) {
+      avgStageDurations[name] = durations.reduce((a, b) => a + b, 0) / durations.length;
+    }
+
+    const stageFailureRates: Record<string, number> = {};
+    for (const [name, counts] of Object.entries(stageFailures)) {
+      stageFailureRates[name] = counts.total > 0 ? counts.failed / counts.total : 0;
+    }
+
+    return json({
+      total,
+      completed,
+      failed,
+      successRate: total > 0 ? completed / total : 0,
+      avgStageDurations,
+      stageFailureRates,
+    });
   }
 
   return null; // not an API route

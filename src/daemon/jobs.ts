@@ -2,6 +2,7 @@ import { mkdir, readdir, rename } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { z } from "zod";
 import { hiveRoot } from "../ctx/store.ts";
+import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
 
 // ── Path constants ────────────────────────────────────────────────────
 
@@ -72,11 +73,12 @@ export type JobStatus = typeof JOB_STATUSES[number];
 export interface JobResult {
   success: boolean;
   error?: string;
-  duration_ms: number;
+  durationMs: number;
   transcriptTokens?: number;
   entriesCreated?: number;
   inputTokens?: number;
   outputTokens?: number;
+  pipeline?: PipelineExecution;
 }
 
 export const RawJobFileSchema = z.object({
@@ -86,15 +88,16 @@ export const RawJobFileSchema = z.object({
   cwd: z.string().optional(),
   repoPath: z.string().optional(),
   reason: z.string().optional(),
-  _error: z.string().optional(),
-  _failedAt: z.string().optional(),
-  _startedAt: z.string().optional(),
-  _completedAt: z.string().optional(),
-  _duration_ms: z.number().optional(),
-  _transcriptTokens: z.number().optional(),
-  _entriesCreated: z.number().optional(),
-  _inputTokens: z.number().optional(),
-  _outputTokens: z.number().optional(),
+  error: z.string().optional(),
+  failedAt: z.string().optional(),
+  startedAt: z.string().optional(),
+  completedAt: z.string().optional(),
+  durationMs: z.number().optional(),
+  transcriptTokens: z.number().optional(),
+  entriesCreated: z.number().optional(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  pipeline: PipelineExecutionSchema.optional(),
 }).passthrough();
 
 // ── Directory setup ───────────────────────────────────────────────────
@@ -139,9 +142,6 @@ export async function listJobs(dir: string): Promise<string[]> {
   }
 }
 
-/**
- * Search done/ for any job matching a predicate.
- */
 async function findInDone(predicate: (job: Job) => boolean): Promise<boolean> {
   const doneFiles = await listJobs(DONE_DIR);
   for (const path of doneFiles) {
@@ -155,16 +155,10 @@ async function findInDone(predicate: (job: Job) => boolean): Promise<boolean> {
   return false;
 }
 
-/**
- * Check if a session has already been processed (exists in done/).
- */
 export async function isDuplicate(sessionId: string): Promise<boolean> {
   return findInDone((job) => job.type === "session-mine" && job.sessionId === sessionId);
 }
 
-/**
- * Check if a git job with the same HEAD SHA + repo was already processed (exists in done/).
- */
 export async function isGitJobProcessed(headSha: string, repoPath: string): Promise<boolean> {
   return findInDone(
     (job) =>
@@ -174,47 +168,39 @@ export async function isGitJobProcessed(headSha: string, repoPath: string): Prom
   );
 }
 
-/**
- * Stamp _startedAt on a job file (for live elapsed tracking).
- */
 export async function stampStarted(jobPath: string): Promise<void> {
   const raw = await Bun.file(jobPath).text();
   const job = RawJobRecord.parse(JSON.parse(raw));
-  job._startedAt = new Date().toISOString();
+  job.startedAt = new Date().toISOString();
   await Bun.write(jobPath, JSON.stringify(job, null, 2));
 }
 
-/**
- * Write completion metadata and move to done/.
- */
 export async function completeJob(jobPath: string, result: JobResult): Promise<string> {
   const raw = await Bun.file(jobPath).text();
   const job = RawJobRecord.parse(JSON.parse(raw));
-  job._completedAt = new Date().toISOString();
-  job._duration_ms = result.duration_ms;
-  if (result.transcriptTokens !== undefined) job._transcriptTokens = result.transcriptTokens;
-  if (result.entriesCreated !== undefined) job._entriesCreated = result.entriesCreated;
-  if (result.inputTokens !== undefined) job._inputTokens = result.inputTokens;
-  if (result.outputTokens !== undefined) job._outputTokens = result.outputTokens;
+  job.completedAt = new Date().toISOString();
+  job.durationMs = result.durationMs;
+  if (result.transcriptTokens !== undefined) job.transcriptTokens = result.transcriptTokens;
+  if (result.entriesCreated !== undefined) job.entriesCreated = result.entriesCreated;
+  if (result.inputTokens !== undefined) job.inputTokens = result.inputTokens;
+  if (result.outputTokens !== undefined) job.outputTokens = result.outputTokens;
+  if (result.pipeline !== undefined) job.pipeline = result.pipeline;
   await Bun.write(jobPath, JSON.stringify(job, null, 2));
   return moveJob(jobPath, DONE_DIR);
 }
 
-/**
- * Mark a failed job by appending error info and moving to failed/.
- */
-export async function failJob(jobPath: string, error: string): Promise<string> {
+export async function failJob(jobPath: string, error: string, partialResult?: Partial<JobResult>): Promise<string> {
   try {
     const raw = await Bun.file(jobPath).text();
     const job = RawJobRecord.parse(JSON.parse(raw));
-    job._error = error;
-    job._failedAt = new Date().toISOString();
+    job.error = error;
+    job.failedAt = new Date().toISOString();
+    if (partialResult?.pipeline !== undefined) job.pipeline = partialResult.pipeline;
     await Bun.write(jobPath, JSON.stringify(job, null, 2));
     return moveJob(jobPath, FAILED_DIR);
   } catch {
-    // Job file already gone — write a minimal failure record directly
     const dest = join(FAILED_DIR, basename(jobPath));
-    const stub = { _error: error, _failedAt: new Date().toISOString(), _originalPath: jobPath };
+    const stub = { error, failedAt: new Date().toISOString(), originalPath: jobPath };
     await Bun.write(dest, JSON.stringify(stub, null, 2));
     return dest;
   }
@@ -226,9 +212,6 @@ export function jobTimestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-/**
- * Enqueue a repo-sync job for the given repo path.
- */
 export async function enqueueRepoSync(repoPath: string): Promise<void> {
   await ensureJobDirs();
   const repoName = basename(repoPath);

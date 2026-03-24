@@ -2,7 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join, relative, basename, resolve } from "node:path";
 import { loadIndex, type IndexEntry } from "./store.ts";
 import { getSessionFilePaths } from "./sessions.ts";
-import { runParallel, type PipelineTask } from "../adapter/pipeline.ts";
+import { runParallel, type PipelineTask } from "../adapter/agent-runner.ts";
 import { errorMessage } from "../git/run.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────

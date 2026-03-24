@@ -130,8 +130,8 @@ test("failJob appends error info and moves to failed dir", async () => {
   expect(failedPath).toBe(join(FAILED_DIR, "fail-test.json"));
   const raw = await readFile(failedPath, "utf-8");
   const data = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
-  expect(data._error).toBe("something went wrong");
-  expect(data._failedAt).toBeTruthy();
+  expect(data.error).toBe("something went wrong");
+  expect(data.failedAt).toBeTruthy();
 
   // Clean up from real failed dir
   await rm(failedPath);

@@ -1,8 +1,17 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { mkdir, chmod, rm } from "node:fs/promises";
 import { hiveRoot } from "../ctx/store.ts";
 import { ensureJobDirs } from "../daemon/jobs.ts";
-import { HOOK_SCRIPTS, HOOK_NAMES, embedBinaryPath, type GitHookName } from "./git-scripts.ts";
+import { loadTrackedRepos } from "../repo/tracking.ts";
+import {
+  HOOK_SCRIPTS,
+  HOOK_NAMES,
+  REPO_LOCAL_SCRIPTS,
+  CTX_HIVE_MARKER_START,
+  CTX_HIVE_MARKER_END,
+  embedBinaryPath,
+  type GitHookName,
+} from "./git-scripts.ts";
 
 const GIT_HOOKS_DIR = join(hiveRoot(), "git-hooks");
 
@@ -99,6 +108,10 @@ export async function installGitHooks(args: string[]): Promise<void> {
   console.log(`  Hooks dir:  ${GIT_HOOKS_DIR}`);
   console.log(`  Hooks:      ${Object.keys(HOOK_SCRIPTS).join(", ")}`);
   console.log(`  Binary:     ${binPath}`);
+
+  // Patch repos that have local core.hooksPath overrides (e.g. husky)
+  await patchAllTrackedRepoHooks();
+
   console.log("");
   console.log("All git repos will now enqueue jobs on push/pull.");
   console.log("Start the daemon with: ctx-hive serve");
@@ -159,4 +172,98 @@ export async function checkGitHooksInstalled(): Promise<{
   }
 
   return { installed: missing.length === 0, hooksPath, missing };
+}
+
+// ── Repo-local hook patching (for repos with local core.hooksPath, e.g. husky) ──
+
+async function getLocalHooksPath(repoPath: string): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["git", "config", "--local", "core.hooksPath"], {
+      cwd: repoPath,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const text = await new Response(proc.stdout).text();
+    if ((await proc.exited) !== 0) return null;
+    return text.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the directory where user hook scripts should be placed.
+ * For husky (core.hooksPath = ".husky/_"), user scripts go in ".husky/".
+ * For other setups, scripts go directly in the hooks path.
+ */
+function resolveUserHooksDir(repoPath: string, localHooksPath: string): string {
+  const abs = resolve(repoPath, localHooksPath);
+  // Husky convention: core.hooksPath ends with "/_"
+  if (localHooksPath.endsWith("/_")) return resolve(abs, "..");
+  return abs;
+}
+
+/**
+ * Extract ctx-hive block content from an existing script, if present.
+ */
+function hasCtxHiveBlock(content: string): boolean {
+  return content.includes(CTX_HIVE_MARKER_START);
+}
+
+/**
+ * Extract the ctx-hive enqueue lines (between markers) from a template,
+ * suitable for appending to an existing script (no shebang).
+ */
+function extractBlock(template: string): string {
+  const start = template.indexOf(CTX_HIVE_MARKER_START);
+  const end = template.indexOf(CTX_HIVE_MARKER_END);
+  if (start === -1 || end === -1) return "";
+  return template.slice(start, end + CTX_HIVE_MARKER_END.length);
+}
+
+/**
+ * Patch a single repo's local hooks to include ctx-hive enqueue calls.
+ * Only acts if the repo has a local core.hooksPath override.
+ */
+export async function patchRepoHooks(repoPath: string): Promise<boolean> {
+  const localPath = await getLocalHooksPath(repoPath);
+  if (localPath == null) return false;
+
+  const userDir = resolveUserHooksDir(repoPath, localPath);
+  await mkdir(userDir, { recursive: true });
+
+  let patched = 0;
+  for (const hookName of HOOK_NAMES) {
+    const hookFile = join(userDir, hookName);
+    const file = Bun.file(hookFile);
+    const exists = await file.exists();
+
+    if (exists) {
+      const content = await file.text();
+      if (hasCtxHiveBlock(content)) continue; // already patched
+      // Append ctx-hive block to existing script
+      const block = extractBlock(REPO_LOCAL_SCRIPTS[hookName]);
+      await Bun.write(hookFile, content.trimEnd() + "\n\n" + block + "\n");
+    } else {
+      // Create new script with ctx-hive enqueue
+      await Bun.write(hookFile, REPO_LOCAL_SCRIPTS[hookName]);
+    }
+    await chmod(hookFile, 0o755);
+    patched++;
+  }
+
+  return patched > 0;
+}
+
+/**
+ * Patch all tracked repos that have local core.hooksPath overrides.
+ */
+export async function patchAllTrackedRepoHooks(): Promise<void> {
+  const repos = await loadTrackedRepos();
+  for (const repo of repos) {
+    const patched = await patchRepoHooks(repo.absPath);
+    if (patched) {
+      console.log(`  Patched repo-local hooks: ${repo.name} (${repo.absPath})`);
+    }
+  }
 }

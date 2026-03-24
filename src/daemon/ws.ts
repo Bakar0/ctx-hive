@@ -62,6 +62,14 @@ export function broadcastRepoEvent(
   broadcast(type, data);
 }
 
+export function broadcastPipelineEvent(
+  type: "pipeline:started" | "pipeline:stage-changed" | "pipeline:completed" | "pipeline:failed",
+  data: unknown,
+): void {
+  metricsDirty = true;
+  broadcast(type, data);
+}
+
 // ── Periodic metrics push (dirty-flag gated) ──────────────────────────
 
 let metricsInterval: ReturnType<typeof setInterval> | null = null;

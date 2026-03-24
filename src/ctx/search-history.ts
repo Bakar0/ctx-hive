@@ -18,7 +18,7 @@ export interface SearchRecord {
   cwd?: string;
   sessionId?: string;
   resultCount: number;
-  results: { id: string; title: string; score: number }[];
+  results: { id: string; title: string; score: number; tokens: number }[];
   durationMs: number;
 }
 

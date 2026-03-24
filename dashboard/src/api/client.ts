@@ -8,6 +8,8 @@ import type {
   SearchStats,
   SessionSummary,
   TrackedRepo,
+  PipelineExecution,
+  PipelineStats,
 } from "./types";
 
 const BASE = "";
@@ -136,4 +138,31 @@ export function openRepo(
   target: "vscode" | "terminal",
 ): Promise<{ ok: boolean }> {
   return post("/api/repos/open", { absPath, target });
+}
+
+// ── Pipelines ───────────────────────────────────────────────────────
+
+export function getPipelines(params?: {
+  project?: string;
+  status?: string;
+  limit?: number;
+}): Promise<PipelineExecution[]> {
+  const sp = new URLSearchParams();
+  if (params?.project != null && params.project !== "") sp.set("project", params.project);
+  if (params?.status != null && params.status !== "") sp.set("status", params.status);
+  if (params?.limit != null) sp.set("limit", String(params.limit));
+  const qs = sp.toString();
+  return get(`/api/pipelines${qs !== "" ? `?${qs}` : ""}`);
+}
+
+export function getPipeline(executionId: string): Promise<PipelineExecution> {
+  return get(`/api/pipelines/${encodeURIComponent(executionId)}`);
+}
+
+export function getPipelineStats(): Promise<PipelineStats> {
+  return get("/api/pipeline-stats");
+}
+
+export function getStageMessage(executionId: string, stageName: string): Promise<unknown> {
+  return get(`/api/pipelines/${encodeURIComponent(executionId)}/messages/${encodeURIComponent(stageName)}`);
 }

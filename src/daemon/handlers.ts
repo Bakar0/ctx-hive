@@ -107,9 +107,9 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
 
   // Read final summarize stage output for entries count and persist to manifest
   try {
-    const summarizeOutput = StageOutputSchema.parse(await readMessage(execution.id, "summarize"));
+    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
     execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
-    await writeManifest(execution.id, execution);
+    writeManifest(execution.id, execution);
   } catch {
     // summarize stage may have been skipped
   }
@@ -150,9 +150,9 @@ async function handleGitChange(job: Job): Promise<JobResult> {
 
   // Read summarize stage output for entries count and persist to manifest
   try {
-    const summarizeOutput = StageOutputSchema.parse(await readMessage(execution.id, "summarize"));
+    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
     execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
-    await writeManifest(execution.id, execution);
+    writeManifest(execution.id, execution);
   } catch {
     // summarize stage may have been skipped
   }
@@ -183,9 +183,9 @@ async function handleRepoSync(job: Job): Promise<JobResult> {
 
   // Read summarize stage output for entries count and persist to manifest
   try {
-    const summarizeOutput = StageOutputSchema.parse(await readMessage(execution.id, "summarize"));
+    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
     execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
-    await writeManifest(execution.id, execution);
+    writeManifest(execution.id, execution);
   } catch {
     // summarize stage may have been skipped
   }

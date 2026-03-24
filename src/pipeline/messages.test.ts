@@ -1,6 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { join } from "node:path";
-import { mkdir } from "node:fs/promises";
+import { openDb, setDb } from "../db/connection.ts";
 import {
   writeMessage,
   readMessage,
@@ -9,84 +8,107 @@ import {
   readManifest,
   listExecutionIds,
   cleanupMessages,
-  createExecutionDir,
-  messagesRoot,
   canonicalStageName,
 } from "./messages.ts";
+import { PipelineExecutionSchema, type PipelineExecution } from "./schema.ts";
 
 const TEST_EXEC_ID = "test-exec-001";
 
+function createTestExecution(): void {
+  writeManifest(TEST_EXEC_ID, {
+    id: TEST_EXEC_ID, pipelineName: "test", status: "running",
+    jobFilename: "test.json", project: "proj", startedAt: "2026-01-01",
+    stages: [],
+  } satisfies PipelineExecution);
+}
+
 describe("messages", () => {
-  beforeEach(async () => {
-    await mkdir(messagesRoot(), { recursive: true });
-    await createExecutionDir(TEST_EXEC_ID);
+  beforeEach(() => {
+    const db = openDb(":memory:");
+    setDb(db);
   });
 
-  afterEach(async () => {
-    await cleanupMessages(TEST_EXEC_ID);
+  afterEach(() => {
+    const prev = setDb(null);
+    prev?.close();
   });
 
-  test("writeMessage and readMessage round-trip", async () => {
+  test("writeMessage and readMessage round-trip", () => {
+    createTestExecution();
     const data = { foo: "bar", count: 42 };
-    await writeMessage(TEST_EXEC_ID, "ingest", data);
+    writeMessage(TEST_EXEC_ID, "ingest", data);
 
-    const result = await readMessage(TEST_EXEC_ID, "ingest");
+    const result = readMessage(TEST_EXEC_ID, "ingest");
     expect(result).toEqual(data);
   });
 
-  test("messageExists returns true for existing message", async () => {
-    await writeMessage(TEST_EXEC_ID, "prepare", { test: true });
-    expect(await messageExists(TEST_EXEC_ID, "prepare")).toBe(true);
+  test("messageExists returns true for existing message", () => {
+    createTestExecution();
+    writeMessage(TEST_EXEC_ID, "prepare", { test: true });
+    expect(messageExists(TEST_EXEC_ID, "prepare")).toBe(true);
   });
 
-  test("messageExists returns false for non-existing message", async () => {
-    expect(await messageExists(TEST_EXEC_ID, "nonexistent")).toBe(false);
+  test("messageExists returns false for non-existing message", () => {
+    expect(messageExists(TEST_EXEC_ID, "nonexistent")).toBe(false);
   });
 
-  test("writeManifest and readManifest round-trip", async () => {
-    const manifest = { id: TEST_EXEC_ID, status: "running", stages: [] };
-    await writeManifest(TEST_EXEC_ID, manifest);
+  test("writeManifest and readManifest round-trip", () => {
+    const manifest: PipelineExecution = {
+      id: TEST_EXEC_ID,
+      pipelineName: "test-pipeline",
+      status: "running",
+      jobFilename: "test.json",
+      project: "test-project",
+      startedAt: "2026-01-01T00:00:00.000Z",
+      stages: [
+        { name: "ingest", status: "completed", retryCount: 0, metrics: {} },
+      ],
+    };
+    writeManifest(TEST_EXEC_ID, manifest);
 
-    const result = await readManifest(TEST_EXEC_ID);
-    expect(result).toEqual(manifest);
+    const result = PipelineExecutionSchema.parse(readManifest(TEST_EXEC_ID));
+    expect(result.id).toBe(TEST_EXEC_ID);
+    expect(result.status).toBe("running");
+    expect(result.pipelineName).toBe("test-pipeline");
   });
 
-  test("listExecutionIds includes created execution", async () => {
-    const ids = await listExecutionIds();
+  test("listExecutionIds includes created execution", () => {
+    writeManifest(TEST_EXEC_ID, {
+      id: TEST_EXEC_ID, pipelineName: "test", status: "running",
+      jobFilename: "test.json", project: "proj", startedAt: "2026-01-01",
+      stages: [],
+    } satisfies PipelineExecution);
+    const ids = listExecutionIds();
     expect(ids).toContain(TEST_EXEC_ID);
   });
 
-  test("cleanupMessages removes execution directory", async () => {
-    await cleanupMessages(TEST_EXEC_ID);
-    expect(await messageExists(TEST_EXEC_ID, "ingest")).toBe(false);
-    const ids = await listExecutionIds();
+  test("cleanupMessages removes execution", () => {
+    writeManifest(TEST_EXEC_ID, {
+      id: TEST_EXEC_ID, pipelineName: "test", status: "running",
+      jobFilename: "test.json", project: "proj", startedAt: "2026-01-01",
+      stages: [],
+    } satisfies PipelineExecution);
+    writeMessage(TEST_EXEC_ID, "ingest", { data: true });
+
+    cleanupMessages(TEST_EXEC_ID);
+
+    expect(messageExists(TEST_EXEC_ID, "ingest")).toBe(false);
+    const ids = listExecutionIds();
     expect(ids).not.toContain(TEST_EXEC_ID);
   });
 
-  test("writeMessage includes metadata in envelope", async () => {
-    await writeMessage(TEST_EXEC_ID, "extract", { result: "ok" }, { inputTokens: 100 });
-
-    const raw = await Bun.file(
-      join(messagesRoot(), TEST_EXEC_ID, "extract.out.json"),
-    ).text();
-    // oxlint-disable-next-line no-unsafe-assignment -- test assertion on JSON
-    const envelope: Record<string, unknown> = JSON.parse(raw);
-    expect(envelope.timestamp).toBeDefined();
-    expect(envelope.stageName).toBe("extract");
-    expect(envelope.data).toEqual({ result: "ok" });
-    expect(envelope.metrics).toEqual({ inputTokens: 100 });
-  });
-
-  test("readMessage falls back to legacy stage name files", async () => {
+  test("readMessage falls back to legacy stage name files", () => {
+    createTestExecution();
     // Write with legacy name, read with canonical name
-    await writeMessage(TEST_EXEC_ID, "scan", { legacy: true });
-    const result = await readMessage(TEST_EXEC_ID, "ingest");
+    writeMessage(TEST_EXEC_ID, "scan", { legacy: true });
+    const result = readMessage(TEST_EXEC_ID, "ingest");
     expect(result).toEqual({ legacy: true });
   });
 
-  test("messageExists falls back to legacy stage name files", async () => {
-    await writeMessage(TEST_EXEC_ID, "collect", { legacy: true });
-    expect(await messageExists(TEST_EXEC_ID, "summarize")).toBe(true);
+  test("messageExists falls back to legacy stage name files", () => {
+    createTestExecution();
+    writeMessage(TEST_EXEC_ID, "collect", { legacy: true });
+    expect(messageExists(TEST_EXEC_ID, "summarize")).toBe(true);
   });
 
   test("canonicalStageName maps legacy names correctly", () => {

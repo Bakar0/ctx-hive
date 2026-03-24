@@ -63,7 +63,7 @@ async function runStage(
     stageExec.status = "skipped";
     stageExec.completedAt = new Date().toISOString();
     options.onStageChange?.(stageExec);
-    await writeManifest(execution.id, execution);
+    writeManifest(execution.id, execution);
     return input; // pass through
   }
 
@@ -72,7 +72,7 @@ async function runStage(
     stageExec.startedAt = new Date().toISOString();
     stageExec.retryCount = attempt;
     options.onStageChange?.(stageExec);
-    await writeManifest(execution.id, execution);
+    writeManifest(execution.id, execution);
 
     const startMs = Date.now();
 
@@ -85,7 +85,6 @@ async function runStage(
         signal: options.signal ?? AbortSignal.timeout(600_000),
       };
 
-      // oxlint-disable-next-line no-unsafe-assignment -- Pipeline stages are heterogeneous; data flows as unknown between stages
       const output = await stage.run(input, ctx);
 
       stageExec.durationMs = Date.now() - startMs;
@@ -94,9 +93,9 @@ async function runStage(
       stageExec.error = undefined;
 
       // Write output message to disk
-      await writeMessage(execution.id, stage.name, output, stageExec.metrics);
+      writeMessage(execution.id, stage.name, output, stageExec.metrics);
       options.onStageChange?.(stageExec);
-      await writeManifest(execution.id, execution);
+      writeManifest(execution.id, execution);
 
       return output;
     } catch (err) {
@@ -112,7 +111,7 @@ async function runStage(
         stageExec.status = "failed";
         stageExec.completedAt = new Date().toISOString();
         options.onStageChange?.(stageExec);
-        await writeManifest(execution.id, execution);
+        writeManifest(execution.id, execution);
         throw err;
       }
     }
@@ -130,7 +129,7 @@ export async function executePipeline(
   options: ExecutorOptions,
 ): Promise<PipelineExecution> {
   const executionId = crypto.randomUUID();
-  await createExecutionDir(executionId);
+  createExecutionDir(executionId);
 
   // Initialize execution record
   const allStageNames: string[] = [];
@@ -154,9 +153,9 @@ export async function executePipeline(
     stages: allStageNames.map(newStageExecution),
   };
 
-  // Write initial input and manifest
-  await writeMessage(executionId, "_input", initialInput);
-  await writeManifest(executionId, execution);
+  // Write manifest first (creates execution row), then initial input
+  writeManifest(executionId, execution);
+  writeMessage(executionId, "_input", initialInput);
 
   // Notify that pipeline has started with all stages visible
   options.onPipelineStart?.(execution);
@@ -206,7 +205,7 @@ export async function executePipeline(
     execution.totalOutputTokens = agg.totalOutputTokens;
     execution.totalCostUsd = agg.totalCostUsd;
 
-    await writeManifest(executionId, execution);
+    writeManifest(executionId, execution);
     return execution;
   } catch (err) {
     // Pipeline failed
@@ -219,14 +218,14 @@ export async function executePipeline(
     execution.totalOutputTokens = agg.totalOutputTokens;
     execution.totalCostUsd = agg.totalCostUsd;
 
-    await writeManifest(executionId, execution);
+    writeManifest(executionId, execution);
     throw err;
   }
 }
 
 // ── Read execution from manifest ─────────────────────────────────────
 
-export async function loadExecution(executionId: string): Promise<PipelineExecution> {
-  const manifest = await readManifest(executionId);
+export function loadExecution(executionId: string): PipelineExecution {
+  const manifest = readManifest(executionId);
   return PipelineExecutionSchema.parse(manifest);
 }

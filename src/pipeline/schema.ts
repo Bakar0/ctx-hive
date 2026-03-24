@@ -84,13 +84,12 @@ export interface StageContext {
 
 // ── Stage definition (compile-time) ──────────────────────────────────
 
-// oxlint-disable-next-line no-explicit-any -- Pipeline stages are heterogeneous; runtime Zod validates at boundaries
-export interface StageDef<TIn = any, TOut = any> {
+export interface StageDef<TIn = unknown, TOut = unknown> {
   name: string;
-  run: (input: TIn, ctx: StageContext) => Promise<TOut>;
+  run(input: TIn, ctx: StageContext): Promise<TOut>;
   retries?: number;
   retryDelayMs?: number;
-  condition?: (input: TIn) => boolean;
+  condition?(input: TIn): boolean;
 }
 
 // ── Pipeline topology ────────────────────────────────────────────────

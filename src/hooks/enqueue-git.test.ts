@@ -1,7 +1,5 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { openDb, setDb } from "../db/connection.ts";
 import {
   writeJob,
   readJob,
@@ -9,17 +7,17 @@ import {
   type GitPullJob,
 } from "../daemon/jobs.ts";
 
-let tempDir: string;
-
-beforeEach(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), "ctx-hive-enqueue-git-test-"));
+beforeEach(() => {
+  const db = openDb(":memory:");
+  setDb(db);
 });
 
-afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+afterEach(() => {
+  const prev = setDb(null);
+  prev?.close();
 });
 
-test("GitPushJob can be written and read back with headSha", async () => {
+test("GitPushJob can be written and read back with headSha", () => {
   const job: GitPushJob = {
     type: "git-push",
     repoPath: "/Users/test/my-repo",
@@ -37,8 +35,8 @@ test("GitPushJob can be written and read back with headSha", async () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  const path = await writeJob(tempDir, job, "push-test.json");
-  const read = await readJob(path);
+  writeJob("", job, "push-test.json");
+  const read = readJob("push-test.json");
   expect(read.type).toBe("git-push");
   if (read.type !== "git-push") throw new Error("unexpected type");
   expect(read.headSha).toBe("abc123def456");
@@ -49,7 +47,7 @@ test("GitPushJob can be written and read back with headSha", async () => {
   expect(read.refs[0]!.localSha).toBe("abc123");
 });
 
-test("GitPullJob merge can be written and read back with headSha", async () => {
+test("GitPullJob merge can be written and read back with headSha", () => {
   const job: GitPullJob = {
     type: "git-pull",
     repoPath: "/Users/test/my-repo",
@@ -59,8 +57,8 @@ test("GitPullJob merge can be written and read back with headSha", async () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  const path = await writeJob(tempDir, job, "pull-merge-test.json");
-  const read = await readJob(path);
+  writeJob("", job, "pull-merge-test.json");
+  const read = readJob("pull-merge-test.json");
   expect(read.type).toBe("git-pull");
   if (read.type !== "git-pull") throw new Error("unexpected type");
   expect(read.headSha).toBe("fff999");
@@ -69,7 +67,7 @@ test("GitPullJob merge can be written and read back with headSha", async () => {
   expect(read.rewrittenShas).toBeUndefined();
 });
 
-test("GitPullJob rebase includes rewritten SHAs", async () => {
+test("GitPullJob rebase includes rewritten SHAs", () => {
   const job: GitPullJob = {
     type: "git-pull",
     repoPath: "/Users/test/my-repo",
@@ -82,8 +80,8 @@ test("GitPullJob rebase includes rewritten SHAs", async () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  const path = await writeJob(tempDir, job, "pull-rebase-test.json");
-  const read = await readJob(path);
+  writeJob("", job, "pull-rebase-test.json");
+  const read = readJob("pull-rebase-test.json");
   expect(read.type).toBe("git-pull");
   if (read.type !== "git-pull") throw new Error("unexpected type");
   expect(read.headSha).toBe("eee888");
@@ -93,7 +91,7 @@ test("GitPullJob rebase includes rewritten SHAs", async () => {
   expect(read.rewrittenShas![1]!.newSha).toBe("ddd444");
 });
 
-test("GitPushJob with multiple refs", async () => {
+test("GitPushJob with multiple refs", () => {
   const job: GitPushJob = {
     type: "git-push",
     repoPath: "/Users/test/my-repo",
@@ -107,14 +105,14 @@ test("GitPushJob with multiple refs", async () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  const path = await writeJob(tempDir, job, "multi-ref-push.json");
-  const read = await readJob(path);
+  writeJob("", job, "multi-ref-push.json");
+  const read = readJob("multi-ref-push.json");
   if (read.type !== "git-push") throw new Error("unexpected type");
   expect(read.refs).toHaveLength(2);
   expect(read.refs[1]!.localRef).toBe("refs/heads/feature");
 });
 
-test("GitPushJob with empty refs (no stdin)", async () => {
+test("GitPushJob with empty refs (no stdin)", () => {
   const job: GitPushJob = {
     type: "git-push",
     repoPath: "/Users/test/my-repo",
@@ -125,8 +123,8 @@ test("GitPushJob with empty refs (no stdin)", async () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  const path = await writeJob(tempDir, job, "empty-refs.json");
-  const read = await readJob(path);
+  writeJob("", job, "empty-refs.json");
+  const read = readJob("empty-refs.json");
   if (read.type !== "git-push") throw new Error("unexpected type");
   expect(read.refs).toHaveLength(0);
   expect(read.headSha).toBe("head222");

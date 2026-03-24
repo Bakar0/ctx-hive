@@ -124,9 +124,10 @@ async function processStream(
   // Create the log file immediately so tail -f can attach
   await Bun.write(logPath, "");
 
-  // oxlint-disable-next-line no-unsafe-type-assertion -- Bun.spawn with stdout:"pipe" returns ReadableStream
-  const stdout = proc.stdout as ReadableStream<Uint8Array>;
-  const reader = stdout.getReader();
+  if (proc.stdout == null || typeof proc.stdout === "number") {
+    throw new Error("Expected stdout to be a ReadableStream");
+  }
+  const reader = proc.stdout.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 

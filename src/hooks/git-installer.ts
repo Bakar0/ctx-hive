@@ -59,7 +59,7 @@ export async function installGitHooks(args: string[]): Promise<void> {
   const force = args.includes("--force");
 
   // 1. Ensure job directories exist
-  await ensureJobDirs();
+  ensureJobDirs();
 
   // 2. Check existing core.hooksPath
   const currentPath = await getGlobalHooksPath();
@@ -259,7 +259,7 @@ export async function patchRepoHooks(repoPath: string): Promise<boolean> {
  * Patch all tracked repos that have local core.hooksPath overrides.
  */
 export async function patchAllTrackedRepoHooks(): Promise<void> {
-  const repos = await loadTrackedRepos();
+  const repos = loadTrackedRepos();
   for (const repo of repos) {
     const patched = await patchRepoHooks(repo.absPath);
     if (patched) {

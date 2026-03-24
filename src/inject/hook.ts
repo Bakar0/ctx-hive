@@ -137,7 +137,7 @@ export async function handleInject(): Promise<void> {
 
     // Try daemon first, fall back to direct search
     let results = await tryDaemonSearch(promptText, project, sessionId);
-    results ??= await search(promptText, { project }, MAX_RESULTS, {
+    results ??= search(promptText, { project }, MAX_RESULTS, {
       source: "inject",
       project,
       cwd: payload.cwd,

@@ -138,7 +138,7 @@ async function ctxAdd(args: string[]): Promise<void> {
     tokens: 0,
   };
 
-  const slug = await writeEntry(meta, body);
+  const slug = writeEntry(meta, body);
   console.log(`Added: ${scope}/${slug} (id: ${meta.id})`);
 }
 
@@ -157,7 +157,7 @@ async function ctxSearch(args: string[]): Promise<void> {
   const limit = parseInt(getFlag(args, "--limit") ?? "10", 10);
   const format = getFlag(args, "--format") ?? "human";
 
-  const results = await search(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit, { source: "cli" });
+  const results = search(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit, { source: "cli" });
 
   if (format === "json") {
     console.log(formatJson(results, query));
@@ -168,8 +168,8 @@ async function ctxSearch(args: string[]): Promise<void> {
   }
 }
 
-async function ctxList(args: string[]): Promise<void> {
-  const index = await loadIndex();
+function ctxList(args: string[]): void {
+  const index = loadIndex();
 
   let entries = index;
   const scopeFlag = getFlag(args, "--scope");
@@ -199,20 +199,20 @@ async function ctxList(args: string[]): Promise<void> {
   }
 }
 
-async function ctxShow(args: string[]): Promise<void> {
+function ctxShow(args: string[]): void {
   const idOrSlug = args.find((a) => !a.startsWith("--") && a !== "show");
   if (idOrSlug === undefined) {
     console.error("Error: provide an id or slug. Usage: ctx-hive show <id-or-slug>");
     process.exit(1);
   }
 
-  const resolved = await resolveEntry(idOrSlug);
+  const resolved = resolveEntry(idOrSlug);
   if (resolved === null) {
     console.error(`Error: entry not found: ${idOrSlug}`);
     process.exit(1);
   }
 
-  const entry = await readEntry(resolved.scope, resolved.slug);
+  const entry = readEntry(resolved.scope, resolved.slug);
   const tags = entry.tags.length > 0 ? `\nTags: ${entry.tags.join(", ")}` : "";
   const tok = entry.tokens > 0 ? `  Tokens: ${entry.tokens}` : "";
   console.log(`# ${entry.title}\nScope: ${entry.scope}  ID: ${entry.id}${tok}${tags}\n\n${entry.body}`);
@@ -225,7 +225,7 @@ async function ctxEdit(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const resolved = await resolveEntry(idOrSlug);
+  const resolved = resolveEntry(idOrSlug);
   if (resolved === null) {
     console.error(`Error: entry not found: ${idOrSlug}`);
     process.exit(1);
@@ -249,7 +249,7 @@ async function ctxEdit(args: string[]): Promise<void> {
   );
   await Bun.write(filePath, updated);
 
-  await rebuildIndex();
+  rebuildIndex();
   console.log(`Updated: ${resolved.scope}/${resolved.slug}`);
 }
 
@@ -260,7 +260,7 @@ async function ctxDelete(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const resolved = await resolveEntry(idOrSlug);
+  const resolved = resolveEntry(idOrSlug);
   if (resolved === null) {
     console.error(`Error: entry not found: ${idOrSlug}`);
     process.exit(1);
@@ -278,13 +278,16 @@ async function ctxDelete(args: string[]): Promise<void> {
     }
   }
 
-  await deleteEntry(resolved.scope, resolved.slug);
+  deleteEntry(resolved.scope, resolved.slug);
   console.log(`Deleted: ${resolved.scope}/${resolved.slug}`);
 }
 
-const VALID_RATINGS = new Set([-1, 0, 1, 2]);
+type Rating = -1 | 0 | 1 | 2;
+function isValidRating(n: number): n is Rating {
+  return n === -1 || n === 0 || n === 1 || n === 2;
+}
 
-async function ctxEvaluate(args: string[]): Promise<void> {
+function ctxEvaluate(args: string[]): void {
   const entryId = getFlag(args, "--entry-id");
   if (entryId === undefined) {
     console.error("Error: --entry-id is required");
@@ -303,7 +306,7 @@ async function ctxEvaluate(args: string[]): Promise<void> {
     process.exit(1);
   }
   const rating = parseInt(ratingStr, 10);
-  if (!VALID_RATINGS.has(rating)) {
+  if (!isValidRating(rating)) {
     console.error("Error: --rating must be -1, 0, 1, or 2");
     process.exit(1);
   }
@@ -313,17 +316,16 @@ async function ctxEvaluate(args: string[]): Promise<void> {
   const evaluation: RelevanceEval = {
     evaluatedAt: new Date().toISOString(),
     sessionId,
-    // oxlint-disable-next-line no-unsafe-type-assertion -- validated above
-    rating: rating as -1 | 0 | 1 | 2,
+    rating,
     ...(reason !== undefined ? { reason } : {}),
   };
 
-  await recordEvaluation(entryId, evaluation);
+  recordEvaluation(entryId, evaluation);
   console.log(`Evaluated: entry ${entryId} rated ${rating} for session ${sessionId.slice(0, 8)}`);
 }
 
-async function ctxRebuildIndex(): Promise<void> {
-  const entries = await rebuildIndex();
+function ctxRebuildIndex(): void {
+  const entries = rebuildIndex();
   console.log(`Index rebuilt: ${entries.length} entries`);
 }
 

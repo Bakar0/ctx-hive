@@ -33,13 +33,27 @@ bun run deploy                    # Build + copy to ~/.local/bin/
 
 - Entries are Markdown files with YAML frontmatter under `~/.ctx-hive/entries/{scope}/` (scopes: `project`, `org`, `personal`).
 - Frontmatter fields: `id`, `title`, `scope`, `tags`, `project`, `created`, `updated`.
-- Job queue is file-based under `~/.ctx-hive/jobs/{pending,processing,done,failed}/`.
+- SQLite database at `~/.ctx-hive/ctx-hive.db` stores jobs, pipeline executions, search history, and the entry search index (FTS5).
 - Job types are zod discriminated unions: `session-mine`, `git-push`, `git-pull`, `repo-sync`.
+
+## Database
+
+- `bun:sqlite` for all database access — don't use better-sqlite3 or other wrappers.
+- Connection singleton in `src/db/connection.ts` (WAL mode, 5s busy timeout, foreign keys on).
+- Migrations in `src/db/migrate.ts`. Tables: `entries`, `jobs`, `pipeline_executions`, `pipeline_stages`, `pipeline_messages`, `search_history`.
+- FTS5 virtual table `entries_fts` for full-text search on entries.
+
+## Pipeline system
+
+- Four pipelines defined in `src/pipeline/definitions.ts`: `session-mine`, `git-push`, `git-pull`, `repo-sync`.
+- Stage definitions implement `StageDef` interface from `src/pipeline/schema.ts`.
+- Stages grouped by domain in `src/pipeline/stages/`: `session.ts`, `git.ts`, `repo.ts`.
+- Executor (`src/pipeline/executor.ts`) supports serial + parallel steps, retries with configurable delays, and abort signals.
 
 ## Linting
 
 - oxlint with strict type-aware rules: `no-floating-promises`, `no-unsafe-*`, `strict-boolean-expressions` (see `.oxlintrc.json`).
-- Use `oxlint-disable-next-line` for suppression — not `eslint-disable`.
+- Never use `oxlint-disable` or `eslint-disable` comments. Fix the underlying type issue instead.
 - Run `bun run lint` to check, `bun run typecheck` for tsc.
 
 ## Testing

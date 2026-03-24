@@ -1,10 +1,8 @@
 /**
- * Append-only JSONL log of search and injection events.
- * Enables review of search efficiency over time.
+ * Search and injection event log backed by SQLite.
  */
-import { join } from "node:path";
-import { appendFile } from "node:fs/promises";
-import { hiveRoot } from "./store.ts";
+import { z } from "zod";
+import { getDb } from "../db/connection.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -31,137 +29,167 @@ export interface SearchStats {
   avgScoreOfServed: number;
 }
 
-// ── Path ───────────────────────────────────────────────────────────────
-
-const HISTORY_PATH = join(hiveRoot(), "search-history.jsonl");
-
-export function historyPath(): string {
-  return HISTORY_PATH;
-}
-
 // ── Append ─────────────────────────────────────────────────────────────
 
-export async function appendSearchRecord(record: SearchRecord): Promise<void> {
-  const line = JSON.stringify(record) + "\n";
-  await appendFile(HISTORY_PATH, line);
+export function appendSearchRecord(record: SearchRecord): void {
+  const db = getDb();
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO search_history (timestamp, source, query, project, cwd, session_id, result_count, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(record.timestamp, record.source, record.query, record.project ?? null,
+      record.cwd ?? null, record.sessionId ?? null, record.resultCount, record.durationMs);
+
+    const { id: historyId } = db.prepare<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
+
+    const insertResult = db.prepare(
+      "INSERT INTO search_results (history_id, entry_id, title, score, tokens) VALUES (?, ?, ?, ?, ?)",
+    );
+    for (const r of record.results) {
+      insertResult.run(historyId, r.id, r.title, r.score, r.tokens);
+    }
+  });
+  tx();
 }
 
 // ── Load ───────────────────────────────────────────────────────────────
 
-export async function loadSearchHistory(opts?: {
+export function loadSearchHistory(opts?: {
   since?: Date;
   limit?: number;
-}): Promise<SearchRecord[]> {
-  const file = Bun.file(HISTORY_PATH);
-  if (!(await file.exists())) return [];
+}): SearchRecord[] {
+  const db = getDb();
 
-  const text = await file.text();
-  const lines = text.split("\n").filter((l) => l.length > 0);
-
-  let records: SearchRecord[] = [];
-  for (const line of lines) {
-    try {
-      // oxlint-disable-next-line no-unsafe-type-assertion -- JSONL lines are serialized SearchRecords
-      records.push(JSON.parse(line) as SearchRecord);
-    } catch {
-      // skip malformed lines
-    }
-  }
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
 
   if (opts?.since) {
-    const sinceMs = opts.since.getTime();
-    records = records.filter((r) => new Date(r.timestamp).getTime() >= sinceMs);
+    conditions.push("h.timestamp >= ?");
+    params.push(opts.since.toISOString());
   }
 
-  // Return newest first
-  records.reverse();
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
+  let limitClause = "";
   if (opts?.limit !== undefined && opts.limit > 0) {
-    records = records.slice(0, opts.limit);
+    limitClause = `LIMIT ?`;
+    params.push(opts.limit);
   }
 
-  return records;
+  interface HistoryRow {
+    id: number; timestamp: string; source: string; query: string;
+    project: string | null; cwd: string | null; session_id: string | null;
+    result_count: number; duration_ms: number;
+  }
+  const historyRows = db.prepare<HistoryRow, (string | number)[]>(`
+    SELECT h.id, h.timestamp, h.source, h.query, h.project, h.cwd, h.session_id, h.result_count, h.duration_ms
+    FROM search_history h
+    ${where}
+    ORDER BY h.timestamp DESC
+    ${limitClause}
+  `).all(...params);
+
+  if (historyRows.length === 0) return [];
+
+  // Batch load results for all history rows
+  const historyIds = historyRows.map((h) => h.id);
+  const placeholders = historyIds.map(() => "?").join(",");
+  interface ResultRow {
+    history_id: number; entry_id: string; title: string; score: number; tokens: number;
+  }
+  const resultRows = db.prepare<ResultRow, number[]>(`
+    SELECT history_id, entry_id, title, score, tokens
+    FROM search_results
+    WHERE history_id IN (${placeholders})
+  `).all(...historyIds);
+
+  const resultsByHistory = new Map<number, SearchRecord["results"]>();
+  for (const r of resultRows) {
+    const list = resultsByHistory.get(r.history_id) ?? [];
+    list.push({ id: r.entry_id, title: r.title, score: r.score, tokens: r.tokens });
+    resultsByHistory.set(r.history_id, list);
+  }
+
+  return historyRows.map((h) => ({
+    timestamp: h.timestamp,
+    source: z.enum(["inject", "cli", "api"]).parse(h.source),
+    query: h.query,
+    project: h.project ?? undefined,
+    cwd: h.cwd ?? undefined,
+    sessionId: h.session_id ?? undefined,
+    resultCount: h.result_count,
+    results: resultsByHistory.get(h.id) ?? [],
+    durationMs: h.duration_ms,
+  }));
 }
 
 // ── Session entries ──────────────────────────────────────────────────────
 
-/**
- * Get deduplicated entries that were injected in a specific session.
- * Returns the highest-scoring version of each entry.
- */
-export async function getSessionEntries(
+export function getSessionEntries(
   sessionId: string,
-): Promise<{ id: string; title: string; score: number }[]> {
-  const records = await loadSearchHistory();
-  const seen = new Map<string, { id: string; title: string; score: number }>();
-  for (const r of records) {
-    if (r.sessionId !== sessionId || r.source !== "inject") continue;
-    for (const result of r.results) {
-      const existing = seen.get(result.id);
-      if (existing === undefined || result.score > existing.score) {
-        seen.set(result.id, result);
-      }
-    }
-  }
-  return [...seen.values()];
+): { id: string; title: string; score: number }[] {
+  const db = getDb();
+
+  const rows = db.prepare<{ id: string; title: string; score: number }, [string]>(`
+    SELECT sr.entry_id as id, sr.title, MAX(sr.score) as score
+    FROM search_results sr
+    JOIN search_history sh ON sh.id = sr.history_id
+    WHERE sh.session_id = ? AND sh.source = 'inject'
+    GROUP BY sr.entry_id
+  `).all(sessionId);
+
+  return rows;
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────
 
-export async function getSearchStats(): Promise<SearchStats> {
-  const records = await loadSearchHistory();
+export function getSearchStats(): SearchStats {
+  const db = getDb();
 
-  if (records.length === 0) {
-    return {
-      totalQueries: 0,
-      bySource: {},
-      zeroResultQueries: 0,
-      avgResultCount: 0,
-      topServedEntries: [],
-      avgScoreOfServed: 0,
-    };
+  const total = db.prepare<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM search_history").get()!;
+  if (total.cnt === 0) {
+    return { totalQueries: 0, bySource: {}, zeroResultQueries: 0, avgResultCount: 0, topServedEntries: [], avgScoreOfServed: 0 };
   }
 
+  const bySourceRows = db.prepare<{ source: string; cnt: number }, []>(
+    "SELECT source, COUNT(*) as cnt FROM search_history GROUP BY source",
+  ).all();
   const bySource: Record<string, number> = {};
-  let zeroResultQueries = 0;
-  let totalResults = 0;
-  let totalScore = 0;
-  let scoredCount = 0;
-  const entryCounts = new Map<string, { title: string; count: number }>();
+  for (const r of bySourceRows) bySource[r.source] = r.cnt;
 
-  for (const record of records) {
-    bySource[record.source] = (bySource[record.source] ?? 0) + 1;
+  const zeroResult = db.prepare<{ cnt: number }, []>(
+    "SELECT COUNT(*) as cnt FROM search_history WHERE result_count = 0",
+  ).get()!;
 
-    if (record.resultCount === 0) {
-      zeroResultQueries++;
-    }
+  const avgResult = db.prepare<{ avg: number }, []>(
+    "SELECT AVG(result_count) as avg FROM search_history",
+  ).get()!;
 
-    totalResults += record.resultCount;
+  const topEntries = db.prepare<{ id: string; title: string; count: number }, []>(`
+    SELECT sr.entry_id as id, sr.title, COUNT(*) as count
+    FROM search_results sr
+    GROUP BY sr.entry_id
+    ORDER BY count DESC
+    LIMIT 10
+  `).all();
 
-    for (const result of record.results) {
-      totalScore += result.score;
-      scoredCount++;
-
-      const existing = entryCounts.get(result.id);
-      if (existing) {
-        existing.count++;
-      } else {
-        entryCounts.set(result.id, { title: result.title, count: 1 });
-      }
-    }
-  }
-
-  const topServedEntries = [...entryCounts.entries()]
-    .map(([id, { title, count }]) => ({ id, title, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
+  const avgScore = db.prepare<{ avg: number | null }, []>(
+    "SELECT AVG(score) as avg FROM search_results",
+  ).get()!;
 
   return {
-    totalQueries: records.length,
+    totalQueries: total.cnt,
     bySource,
-    zeroResultQueries,
-    avgResultCount: totalResults / records.length,
-    topServedEntries,
-    avgScoreOfServed: scoredCount > 0 ? totalScore / scoredCount : 0,
+    zeroResultQueries: zeroResult.cnt,
+    avgResultCount: avgResult.avg,
+    topServedEntries: topEntries,
+    avgScoreOfServed: avgScore.avg ?? 0,
   };
+}
+
+// ── Legacy exports ───────────────────────────────────────────────────
+
+export function historyPath(): string {
+  return "";
 }

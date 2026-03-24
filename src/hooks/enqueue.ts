@@ -1,10 +1,8 @@
 import { basename } from "node:path";
 import { z } from "zod";
 import {
-  ensureJobDirs,
   writeJob,
   jobTimestamp,
-  PENDING_DIR,
   type SessionMineJob,
   type GitPushJob,
   type GitPullJob,
@@ -25,7 +23,7 @@ function jobFilename(prefix: string): string {
 // ── Enqueue entry point ──────────────────────────────────────────────
 
 /**
- * Reads hook payload and writes a job file.
+ * Reads hook payload and writes a job to the DB.
  * Usage: ctx-hive enqueue <job-type> [args...]
  */
 export async function enqueue(args: string[]): Promise<void> {
@@ -69,8 +67,6 @@ async function enqueueSessionMine(): Promise<void> {
     process.exit(0);
   }
 
-  await ensureJobDirs();
-
   const prefix = (payload.session_id ?? "unknown").slice(0, 8);
 
   const job: SessionMineJob = {
@@ -82,7 +78,7 @@ async function enqueueSessionMine(): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  await writeJob(PENDING_DIR, job, jobFilename(prefix));
+  writeJob("", job, jobFilename(prefix));
 }
 
 // ── git-push ─────────────────────────────────────────────────────────
@@ -114,8 +110,6 @@ async function enqueueGitPush(args: string[]): Promise<void> {
     }
   }
 
-  await ensureJobDirs();
-
   const repoName = basename(repoPath);
   const job: GitPushJob = {
     type: "git-push",
@@ -127,7 +121,7 @@ async function enqueueGitPush(args: string[]): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  await writeJob(PENDING_DIR, job, jobFilename(`push-${repoName}`));
+  writeJob("", job, jobFilename(`push-${repoName}`));
 }
 
 // ── git-pull ─────────────────────────────────────────────────────────
@@ -160,8 +154,6 @@ async function enqueueGitPull(args: string[]): Promise<void> {
     }
   }
 
-  await ensureJobDirs();
-
   const repoName = basename(repoPath);
   const job: GitPullJob = {
     type: "git-pull",
@@ -173,5 +165,5 @@ async function enqueueGitPull(args: string[]): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  await writeJob(PENDING_DIR, job, jobFilename(`pull-${repoName}`));
+  writeJob("", job, jobFilename(`pull-${repoName}`));
 }

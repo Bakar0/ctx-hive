@@ -16,7 +16,6 @@ const BASE = "";
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
   return res.json() as Promise<T>;
 }
 
@@ -26,13 +25,11 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: body != null ? JSON.stringify(body) : undefined,
   });
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
   return res.json() as Promise<T>;
 }
 
 async function del<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { method: "DELETE" });
-  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
   return res.json() as Promise<T>;
 }
 

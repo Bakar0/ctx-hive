@@ -1,6 +1,8 @@
-import { join } from "node:path";
-import { loadIndex, hiveRoot, type IndexEntry } from "./store.ts";
+import { z } from "zod";
+import { getDb } from "../db/connection.ts";
+import type { IndexEntry } from "./store.ts";
 import type { Scope } from "./store.ts";
+import { ScopeSchema } from "./store.ts";
 import { getSignalScores, recordSearchHits } from "./signals.ts";
 import { appendSearchRecord, type SearchSource } from "./search-history.ts";
 
@@ -27,65 +29,11 @@ export function tokenize(query: string): string[] {
     .filter((t) => t.length > 0);
 }
 
-// ── Scoring ────────────────────────────────────────────────────────────
+// ── FTS5 query builder ─────────────────────────────────────────────────
 
-const TAG_WEIGHT = 5;
-const TITLE_WEIGHT = 3;
-const CONTENT_WEIGHT = 1;
-const CONTENT_CAP_PER_TOKEN = 5;
-
-export function scoreEntry(
-  tokens: string[],
-  entry: IndexEntry,
-  content: string
-): number {
-  let score = 0;
-  const titleLower = entry.title.toLowerCase();
-  const tagsLower = entry.tags.map((t) => t.toLowerCase());
-  const contentLower = content.toLowerCase();
-
-  for (const token of tokens) {
-    // Tag match (exact)
-    if (tagsLower.includes(token)) {
-      score += TAG_WEIGHT;
-    }
-
-    // Title match (substring)
-    if (titleLower.includes(token)) {
-      score += TITLE_WEIGHT;
-    }
-
-    // Content match (count occurrences, capped)
-    let count = 0;
-    let idx = 0;
-    while ((idx = contentLower.indexOf(token, idx)) !== -1) {
-      count++;
-      idx += token.length;
-      if (count >= CONTENT_CAP_PER_TOKEN) break;
-    }
-    score += count * CONTENT_WEIGHT;
-  }
-
-  return score;
-}
-
-function extractExcerpt(body: string, tokens: string[], maxLen = 150): string {
-  const bodyLower = body.toLowerCase();
-  // Find the first token occurrence and extract around it
-  for (const token of tokens) {
-    const idx = bodyLower.indexOf(token);
-    if (idx !== -1) {
-      const start = Math.max(0, idx - 40);
-      const end = Math.min(body.length, idx + maxLen - 40);
-      let excerpt = body.slice(start, end).replace(/\n/g, " ").trim();
-      if (start > 0) excerpt = "..." + excerpt;
-      if (end < body.length) excerpt = excerpt + "...";
-      return excerpt;
-    }
-  }
-  // Fallback: first N chars
-  const excerpt = body.slice(0, maxLen).replace(/\n/g, " ").trim();
-  return excerpt.length < body.length ? excerpt + "..." : excerpt;
+function buildFtsQuery(tokens: string[]): string {
+  // Use prefix matching for each token, OR between them for broad recall
+  return tokens.map((t) => `"${t}"*`).join(" OR ");
 }
 
 // ── Search ─────────────────────────────────────────────────────────────
@@ -97,65 +45,96 @@ export interface SearchMeta {
   sessionId?: string;
 }
 
-export async function search(
+interface FtsRow {
+  id: string;
+  title: string;
+  slug: string;
+  scope: string;
+  tags: string;
+  project: string;
+  body: string;
+  tokens: number;
+  created_at: string;
+  updated_at: string;
+  fts_score: number;
+  excerpt: string;
+}
+
+export function search(
   query: string,
   filters: SearchFilters = {},
   limit = 10,
   meta?: SearchMeta,
-): Promise<SearchResult[]> {
+): SearchResult[] {
   const start = Date.now();
-  const index = await loadIndex();
   const tokens = tokenize(query);
   if (tokens.length === 0) return [];
 
-  // Pre-filter
-  let candidates = index;
+  const ftsQuery = buildFtsQuery(tokens);
+  const db = getDb();
+
+  // Build WHERE clauses for filters
+  const conditions: string[] = ["entries_fts MATCH ?"];
+  const params: (string | number)[] = [ftsQuery];
+
   if (filters.scope) {
-    candidates = candidates.filter((e) => e.scope === filters.scope);
-  }
-  if (filters.tags && filters.tags.length > 0) {
-    const filterTags = filters.tags.map((t) => t.toLowerCase());
-    candidates = candidates.filter((e) =>
-      filterTags.some((ft) => e.tags.map((t) => t.toLowerCase()).includes(ft))
-    );
+    conditions.push("e.scope = ?");
+    params.push(filters.scope);
   }
   if (filters.project !== undefined) {
-    candidates = candidates.filter((e) => e.project === filters.project);
+    conditions.push("e.project = ?");
+    params.push(filters.project);
   }
 
-  // Score
-  const results: SearchResult[] = [];
-  const root = hiveRoot();
+  // BM25 weights: title=5, tags=3, body=1 (matching original TAG/TITLE/CONTENT weights)
+  const sql = `
+    SELECT e.id, e.title, e.slug, e.scope, e.tags, e.project, e.body, e.tokens,
+           e.created_at, e.updated_at,
+           bm25(entries_fts, 5.0, 3.0, 1.0) as fts_score,
+           snippet(entries_fts, 2, '', '', '...', 32) as excerpt
+    FROM entries_fts
+    JOIN entries e ON entries_fts.rowid = e.rowid
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY fts_score
+    LIMIT ?
+  `;
+  params.push(limit * 3); // Fetch extra to allow signal boosting to reorder
 
-  // Load signal scores for all candidates in one read
-  const signalScores = await getSignalScores(candidates.map((e) => e.id));
+  const rows = db.prepare<FtsRow, (string | number)[]>(sql).all(...params);
 
-  for (const entry of candidates) {
-    const filePath = join(root, entry.path);
-    let content = "";
-    try {
-      content = await Bun.file(filePath).text();
-    } catch {
-      continue;
-    }
-
-    const textScore = scoreEntry(tokens, entry, content);
-    if (textScore > 0) {
-      // Apply multiplicative signal boost (at most 2x the text score)
-      const boost = signalScores[entry.id] ?? 0;
-      const score = textScore * (1 + boost);
-
-      // Extract body (after frontmatter) for excerpt
-      const bodyMatch = /^---\n[\s\S]*?\n---\n?([\s\S]*)$/.exec(content);
-      const body = bodyMatch !== null ? (bodyMatch[1] ?? "").trim() : content;
-
-      results.push({
-        ...entry,
-        score,
-        excerpt: extractExcerpt(body, tokens),
-      });
-    }
+  // Apply tag filter (FTS5 can't filter by exact tag membership)
+  let filtered = rows;
+  if (filters.tags && filters.tags.length > 0) {
+    const filterTags = filters.tags.map((t) => t.toLowerCase());
+    filtered = rows.filter((row) => {
+      const rowTags = z.array(z.string()).parse(JSON.parse(row.tags)).map((t) => t.toLowerCase());
+      return filterTags.some((ft) => rowTags.includes(ft));
+    });
   }
+
+  // Build results with signal boost
+  const entryIds = filtered.map((r) => r.id);
+  const signalScores = getSignalScores(entryIds);
+
+  const results: SearchResult[] = filtered.map((row) => {
+    const textScore = Math.abs(row.fts_score); // BM25 returns negative values
+    const boost = signalScores[row.id] ?? 0;
+    const score = textScore * (1 + boost);
+
+    return {
+      id: row.id,
+      title: row.title,
+      scope: ScopeSchema.parse(row.scope),
+      tags: z.array(z.string()).parse(JSON.parse(row.tags)),
+      project: row.project,
+      created: row.created_at,
+      updated: row.updated_at,
+      tokens: row.tokens,
+      path: `entries/${row.scope}/${row.slug}.md`,
+      score,
+      excerpt: row.excerpt || row.body.slice(0, 150),
+    };
+  });
 
   // Sort by score descending and normalize to 0-1
   results.sort((a, b) => b.score - a.score);
@@ -167,12 +146,12 @@ export async function search(
     }
   }
 
-  // Fire-and-forget: record which entries were served
-  void recordSearchHits(finalResults.map((r) => r.id));
+  // Record which entries were served
+  recordSearchHits(finalResults.map((r) => r.id));
 
   // Record search event to history (awaited to prevent process.exit race)
   if (meta?.source) {
-    await appendSearchRecord({
+    appendSearchRecord({
       timestamp: new Date().toISOString(),
       source: meta.source,
       query,
@@ -218,4 +197,41 @@ export function formatMarkdown(results: SearchResult[]): string {
       return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score} | **tokens:** ${r.tokens}${tags}\n\n${r.excerpt}`;
     })
     .join("\n\n---\n\n");
+}
+
+// ── Legacy scoring (kept for backward compat) ──────────────────────────
+
+const TAG_WEIGHT = 5;
+const TITLE_WEIGHT = 3;
+const CONTENT_WEIGHT = 1;
+const CONTENT_CAP_PER_TOKEN = 5;
+
+export function scoreEntry(
+  tokens: string[],
+  entry: IndexEntry,
+  content: string,
+): number {
+  let score = 0;
+  const titleLower = entry.title.toLowerCase();
+  const tagsLower = entry.tags.map((t) => t.toLowerCase());
+  const contentLower = content.toLowerCase();
+
+  for (const token of tokens) {
+    if (tagsLower.includes(token)) {
+      score += TAG_WEIGHT;
+    }
+    if (titleLower.includes(token)) {
+      score += TITLE_WEIGHT;
+    }
+    let count = 0;
+    let idx = 0;
+    while ((idx = contentLower.indexOf(token, idx)) !== -1) {
+      count++;
+      idx += token.length;
+      if (count >= CONTENT_CAP_PER_TOKEN) break;
+    }
+    score += count * CONTENT_WEIGHT;
+  }
+
+  return score;
 }

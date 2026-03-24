@@ -1,7 +1,8 @@
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
-import { hiveRoot } from "../ctx/store.ts";
+import { getDb } from "../db/connection.ts";
 import { resolveRepoMeta } from "../ctx/init.ts";
 import { patchRepoHooks } from "../hooks/git-installer.ts";
 
@@ -16,38 +17,52 @@ const TrackedRepoSchema = z.object({
   lastScannedAt: z.string().optional(),
 });
 
-const RepoStoreSchema = z.object({
-  repos: z.array(TrackedRepoSchema),
-  updatedAt: z.string(),
-});
-
 export type TrackedRepo = z.infer<typeof TrackedRepoSchema>;
 
-// ── Paths ──────────────────────────────────────────────────────────────
+// ── Row type ──────────────────────────────────────────────────────────
 
-export function reposJsonPath(): string {
-  return join(hiveRoot(), "repos.json");
+interface RepoRow {
+  id: number;
+  name: string;
+  abs_path: string;
+  org: string;
+  remote_url: string;
+  tracked_at: string;
+  last_scanned_at: string | null;
+}
+
+function rowToTrackedRepo(row: RepoRow): TrackedRepo {
+  return {
+    name: row.name,
+    absPath: row.abs_path,
+    org: row.org,
+    remoteUrl: row.remote_url,
+    trackedAt: row.tracked_at,
+    lastScannedAt: row.last_scanned_at ?? undefined,
+  };
 }
 
 // ── Load / Save ────────────────────────────────────────────────────────
 
-export async function loadTrackedRepos(): Promise<TrackedRepo[]> {
-  const file = Bun.file(reposJsonPath());
-  if (!(await file.exists())) return [];
-  try {
-    const data = RepoStoreSchema.parse(await file.json());
-    return data.repos ?? [];
-  } catch {
-    return [];
-  }
+export function loadTrackedRepos(): TrackedRepo[] {
+  const db = getDb();
+  const rows = db.prepare<RepoRow, []>("SELECT * FROM tracked_repos ORDER BY tracked_at").all();
+  return rows.map(rowToTrackedRepo);
 }
 
-export async function saveTrackedRepos(repos: TrackedRepo[]): Promise<void> {
-  const store: z.infer<typeof RepoStoreSchema> = {
-    repos,
-    updatedAt: new Date().toISOString(),
-  };
-  await Bun.write(reposJsonPath(), JSON.stringify(store, null, 2));
+export function saveTrackedRepos(repos: TrackedRepo[]): void {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.exec("DELETE FROM tracked_repos");
+    const insert = db.prepare(`
+      INSERT INTO tracked_repos (name, abs_path, org, remote_url, tracked_at, last_scanned_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const repo of repos) {
+      insert.run(repo.name, repo.absPath, repo.org, repo.remoteUrl, repo.trackedAt, repo.lastScannedAt ?? null);
+    }
+  });
+  tx();
 }
 
 // ── Track / Untrack ────────────────────────────────────────────────────
@@ -55,7 +70,6 @@ export async function saveTrackedRepos(repos: TrackedRepo[]): Promise<void> {
 export async function trackRepo(absPath: string): Promise<TrackedRepo> {
   const normalized = resolve(absPath);
 
-  // Validate the path exists and has .git
   try {
     const gitStat = await stat(join(normalized, ".git"));
     if (!gitStat.isDirectory()) {
@@ -66,11 +80,11 @@ export async function trackRepo(absPath: string): Promise<TrackedRepo> {
     throw new Error(`Not a git repository or path not found: ${normalized}`);
   }
 
-  const repos = await loadTrackedRepos();
+  const db = getDb();
 
   // Dedup by absPath
-  const existing = repos.find((r) => r.absPath === normalized);
-  if (existing) return existing;
+  const existing = db.prepare<RepoRow, [string]>("SELECT * FROM tracked_repos WHERE abs_path = ?").get(normalized);
+  if (existing) return rowToTrackedRepo(existing);
 
   const meta = await resolveRepoMeta(normalized);
   const tracked: TrackedRepo = {
@@ -81,23 +95,21 @@ export async function trackRepo(absPath: string): Promise<TrackedRepo> {
     trackedAt: new Date().toISOString(),
   };
 
-  repos.push(tracked);
-  await saveTrackedRepos(repos);
+  db.prepare(`
+    INSERT INTO tracked_repos (name, abs_path, org, remote_url, tracked_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(tracked.name, tracked.absPath, tracked.org, tracked.remoteUrl, tracked.trackedAt);
 
-  // Patch repo-local hooks if the repo has a local core.hooksPath (e.g. husky)
   await patchRepoHooks(normalized);
 
   return tracked;
 }
 
-export async function untrackRepo(absPath: string): Promise<boolean> {
+export function untrackRepo(absPath: string): boolean {
   const normalized = resolve(absPath);
-  const repos = await loadTrackedRepos();
-  const idx = repos.findIndex((r) => r.absPath === normalized);
-  if (idx === -1) return false;
-  repos.splice(idx, 1);
-  await saveTrackedRepos(repos);
-  return true;
+  const db = getDb();
+  const result = db.prepare("DELETE FROM tracked_repos WHERE abs_path = ?").run(normalized);
+  return result.changes > 0;
 }
 
 /**
@@ -121,16 +133,20 @@ export function findTrackedRepoFor(
   return best;
 }
 
-export async function isTracked(absPath: string): Promise<boolean> {
-  const repos = await loadTrackedRepos();
+export function isTracked(absPath: string): boolean {
+  const repos = loadTrackedRepos();
   return findTrackedRepoFor(absPath, repos) !== undefined;
 }
 
-export async function updateLastScanned(absPath: string): Promise<void> {
+export function updateLastScanned(absPath: string): void {
   const normalized = resolve(absPath);
-  const repos = await loadTrackedRepos();
-  const repo = repos.find((r) => r.absPath === normalized);
-  if (!repo) return;
-  repo.lastScannedAt = new Date().toISOString();
-  await saveTrackedRepos(repos);
+  const db = getDb();
+  db.prepare("UPDATE tracked_repos SET last_scanned_at = ? WHERE abs_path = ?")
+    .run(new Date().toISOString(), normalized);
+}
+
+// ── Legacy exports ───────────────────────────────────────────────────
+
+export function reposJsonPath(): string {
+  return "";
 }

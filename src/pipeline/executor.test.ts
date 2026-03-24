@@ -1,43 +1,45 @@
-import { test, expect, describe, afterEach } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { test, expect, describe, beforeEach, afterEach } from "bun:test";
+import { openDb, setDb } from "../db/connection.ts";
 import { executePipeline } from "./executor.ts";
-import { cleanupMessages, messagesRoot, readMessage } from "./messages.ts";
+import { cleanupMessages, readMessage } from "./messages.ts";
 import type { PipelineDef, StageDef, StageExecution } from "./schema.ts";
 
 // Track execution IDs for cleanup
 const createdExecutions: string[] = [];
 
-async function cleanAll() {
+function cleanAll() {
   for (const id of createdExecutions) {
-    await cleanupMessages(id);
+    cleanupMessages(id);
   }
   createdExecutions.length = 0;
+  const prev = setDb(null);
+  prev?.close();
 }
 
-afterEach(cleanAll);
+beforeEach(() => {
+  const db = openDb(":memory:");
+  setDb(db);
+});
 
-// Ensure messages dir exists
-await mkdir(messagesRoot(), { recursive: true });
+afterEach(cleanAll);
 
 describe("executePipeline", () => {
   test("executes serial stages in order", async () => {
     const order: string[] = [];
 
-    const stageA: StageDef = {
+    const stageA: StageDef<Record<string, unknown>, Record<string, unknown>> = {
       name: "a",
       async run(input) {
         order.push("a");
-        // oxlint-disable-next-line no-unsafe-type-assertion -- test helper
-        return { ...(input as Record<string, unknown>), fromA: true };
+        return { ...input, fromA: true };
       },
     };
 
-    const stageB: StageDef = {
+    const stageB: StageDef<Record<string, unknown>, Record<string, unknown>> = {
       name: "b",
       async run(input) {
         order.push("b");
-        // oxlint-disable-next-line no-unsafe-type-assertion -- test helper
-        return { ...(input as Record<string, unknown>), fromB: true };
+        return { ...input, fromB: true };
       },
     };
 
@@ -182,7 +184,8 @@ describe("executePipeline", () => {
     }
 
     // Read manifest to verify state
-    const ids = await import("./messages.ts").then((m) => m.listExecutionIds());
+    const { listExecutionIds: listIds } = await import("./messages.ts");
+    const ids = listIds();
     for (const id of ids) {
       if (id.length === 36) { // UUID format
         createdExecutions.push(id);
@@ -234,7 +237,7 @@ describe("executePipeline", () => {
 
     createdExecutions.push(execution.id);
 
-    const output = await readMessage(execution.id, "writer");
+    const output = readMessage(execution.id, "writer");
     expect(output).toEqual({ wrote: true });
   });
 });

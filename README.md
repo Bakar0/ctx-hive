@@ -77,6 +77,7 @@ Commands:
   delete <id>            Remove an entry
   init [path]            Scan repos and mine Claude sessions for context
   update [path]          Update existing entries (alias for init)
+  evaluate               Record a relevance evaluation for an entry
   rebuild-index          Regenerate the search index
   serve                  Start the background daemon and dashboard
   enqueue <job-type>     Enqueue a job for the daemon
@@ -119,13 +120,13 @@ ctx-hive serve --port 4000         # Custom dashboard port
 ctx-hive serve --verbose           # Detailed logging
 ```
 
-The daemon watches `~/.ctx-hive/jobs/pending/` and processes jobs in the background. A web dashboard is served at `http://localhost:3939` with live WebSocket updates.
+The daemon polls for pending jobs in SQLite and processes them via the pipeline execution engine. A web dashboard is served at `http://localhost:3939` with live WebSocket updates.
 
 **Job types:** `session-mine`, `git-push`, `git-pull`, `repo-sync`
 
-**Job lifecycle:** `pending/` -> `processing/` -> `done/` or `failed/`
+**Job lifecycle:** `pending` -> `processing` -> `done` or `failed` (tracked in SQLite at `~/.ctx-hive/ctx-hive.db`)
 
-Only one daemon instance runs at a time (PID file lock).
+Each job runs a multi-stage pipeline (ingest → prepare → extract → summarize) with retry support. Only one daemon instance runs at a time (PID file lock).
 
 ### Hooks
 
@@ -155,18 +156,21 @@ Git hooks are fire-and-forget — they never block git operations.
 
 ## Storage
 
-Entries are stored as Markdown files with YAML frontmatter under `~/.ctx-hive/`, organized by scope. A JSON index enables fast search.
+Entries are stored as Markdown files with YAML frontmatter under `~/.ctx-hive/`, organized by scope. SQLite FTS5 provides full-text search.
 
 ## Architecture
 
 ```
 src/
-├── adapter/    Claude CLI subprocess adapter (spawn, stream-parse, pipeline)
+├── adapter/    Claude CLI subprocess adapter (spawn, stream-parse)
 ├── cli/        CLI argument parsing
-├── ctx/        Core logic — commands, search, store, init, sessions
-├── daemon/     Background daemon — serve, job queue, handlers, REST API, WebSocket, dashboard
+├── ctx/        Core logic — commands, search, store, init, sessions, signals
+├── daemon/     Background daemon — serve, job queue, handlers, REST API, WebSocket
+├── db/         SQLite database — connection, migrations, FTS5 search index
 ├── git/        Git subprocess execution
 ├── hooks/      Git & session hooks — enqueue, installers, hook scripts
+├── inject/     UserPromptSubmit hook — searches context and injects into Claude prompts
+├── pipeline/   Pipeline execution — stage definitions, executor, message passing
 ├── repo/       Repo scanning & tracking
 ├── skills/     Claude Code skill definition & installer
 ├── types/      TypeScript declarations
@@ -175,11 +179,14 @@ src/
 
 - **Commands** (`src/ctx/commands.ts`) — CLI dispatcher routing to handler functions
 - **Store** (`src/ctx/store.ts`) — Entry CRUD with frontmatter parsing
-- **Search** (`src/ctx/search.ts`) — Full-text search with token-based weighted ranking
+- **Search** (`src/ctx/search.ts`) — Full-text search with FTS5-backed weighted ranking
 - **Init** (`src/ctx/init.ts`) — Repo scanning and parallel agent execution
 - **Sessions** (`src/ctx/sessions.ts`) — Claude session file discovery
+- **Database** (`src/db/`) — SQLite connection, migrations, FTS5 search index
+- **Pipeline** (`src/pipeline/`) — Execution engine with serial/parallel stages, retries, abort signals
 - **Daemon** (`src/daemon/serve.ts`) — Background job processor with HTTP dashboard
-- **Jobs** (`src/daemon/jobs.ts`) — File-based job queue with zod-validated schemas
+- **Jobs** (`src/daemon/jobs.ts`) — SQLite-backed job queue with zod-validated schemas
+- **Inject** (`src/inject/hook.ts`) — UserPromptSubmit hook for context injection into Claude prompts
 - **Hooks** (`src/hooks/`) — SessionEnd hook and global git hook installers
 - **Repo tracking** (`src/repo/tracking.ts`) — Track/untrack repos for context generation
 

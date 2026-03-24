@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ensureJobDirs } from "../daemon/jobs.ts";
 import { CLAUDE_SETTINGS_PATH } from "../adapter/claude-paths.ts";
 
 const HookCommandSchema = z.object({ type: z.string().optional(), command: z.string().optional() });
@@ -33,10 +32,7 @@ function isCtxHiveHook(entry: z.infer<typeof HookEntrySchema>): boolean {
 }
 
 export async function installHook(): Promise<void> {
-  // 1. Ensure job directories exist
-  await ensureJobDirs();
-
-  // 2. Read existing settings (or start fresh)
+  // 1. Read existing settings (or start fresh)
   const settingsFile = Bun.file(CLAUDE_SETTINGS_PATH);
   let settings: z.infer<typeof SettingsSchema> = {};
   if (await settingsFile.exists()) {

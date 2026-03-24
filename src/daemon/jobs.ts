@@ -1,16 +1,7 @@
-import { mkdir, readdir, rename } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { basename } from "node:path";
 import { z } from "zod";
-import { hiveRoot } from "../ctx/store.ts";
+import { getDb } from "../db/connection.ts";
 import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
-
-// ── Path constants ────────────────────────────────────────────────────
-
-export const JOBS_ROOT = join(hiveRoot(), "jobs");
-export const PENDING_DIR = join(JOBS_ROOT, "pending");
-export const PROCESSING_DIR = join(JOBS_ROOT, "processing");
-export const DONE_DIR = join(JOBS_ROOT, "done");
-export const FAILED_DIR = join(JOBS_ROOT, "failed");
 
 // ── Schemas & Types ──────────────────────────────────────────────────
 
@@ -65,8 +56,6 @@ export type GitPullJob = z.infer<typeof GitPullJobSchema>;
 export type RepoSyncJob = z.infer<typeof RepoSyncJobSchema>;
 export type Job = z.infer<typeof JobSchema>;
 
-const RawJobRecord = z.record(z.string(), z.unknown());
-
 export const JOB_STATUSES = ["pending", "processing", "done", "failed"] as const;
 export type JobStatus = typeof JOB_STATUSES[number];
 
@@ -100,110 +89,84 @@ export const RawJobFileSchema = z.object({
   pipeline: PipelineExecutionSchema.optional(),
 }).passthrough();
 
-// ── Directory setup ───────────────────────────────────────────────────
+// ── Job I/O ──────────────────────────────────────────────────────────
 
-export async function ensureJobDirs(): Promise<void> {
-  await Promise.all([
-    mkdir(PENDING_DIR, { recursive: true }),
-    mkdir(PROCESSING_DIR, { recursive: true }),
-    mkdir(DONE_DIR, { recursive: true }),
-    mkdir(FAILED_DIR, { recursive: true }),
-  ]);
+export function readJob(filenameOrPath: string): Job {
+  const db = getDb();
+  const filename = basename(filenameOrPath);
+  const row = db.prepare<{ payload: string }, [string]>("SELECT payload FROM jobs WHERE filename = ?").get(filename);
+  if (!row) throw new Error(`Job not found: ${filename}`);
+  return JobSchema.parse(JSON.parse(row.payload));
 }
 
-// ── Job file I/O ──────────────────────────────────────────────────────
-
-export async function readJob(path: string): Promise<Job> {
-  const raw = await Bun.file(path).text();
-  return JobSchema.parse(JSON.parse(raw));
+export function writeJob(job: Job, filename: string): string {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO jobs (filename, type, status, payload, created_at)
+    VALUES (?, ?, 'pending', ?, ?)
+  `).run(filename, job.type, JSON.stringify(job), job.createdAt);
+  return filename;
 }
 
-export async function writeJob(dir: string, job: Job, filename: string): Promise<string> {
-  const path = join(dir, filename);
-  await Bun.write(path, JSON.stringify(job, null, 2));
-  return path;
+export function listJobs(status: JobStatus): string[] {
+  const db = getDb();
+  const rows = db.prepare<{ filename: string }, [string]>(
+    "SELECT filename FROM jobs WHERE status = ? ORDER BY created_at",
+  ).all(status);
+  return rows.map((r) => r.filename);
 }
 
-export async function moveJob(fromPath: string, toDir: string): Promise<string> {
-  const dest = join(toDir, basename(fromPath));
-  await rename(fromPath, dest);
-  return dest;
+export function isDuplicate(sessionId: string): boolean {
+  const db = getDb();
+  const row = db.prepare<{ cnt: number }, [string]>(
+    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type = 'session-mine' AND json_extract(payload, '$.sessionId') = ?",
+  ).get(sessionId);
+  return row !== null && row.cnt > 0;
 }
 
-export async function listJobs(dir: string): Promise<string[]> {
-  try {
-    const files = await readdir(dir);
-    return files
-      .filter((f) => f.endsWith(".json"))
-      .sort()
-      .map((f) => join(dir, f));
-  } catch {
-    return [];
-  }
+export function isGitJobProcessed(headSha: string, repoPath: string): boolean {
+  const db = getDb();
+  const row = db.prepare<{ cnt: number }, [string, string]>(
+    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type IN ('git-push', 'git-pull') AND json_extract(payload, '$.headSha') = ? AND json_extract(payload, '$.repoPath') = ?",
+  ).get(headSha, repoPath);
+  return row !== null && row.cnt > 0;
 }
 
-async function findInDone(predicate: (job: Job) => boolean): Promise<boolean> {
-  const doneFiles = await listJobs(DONE_DIR);
-  for (const path of doneFiles) {
-    try {
-      const job = await readJob(path);
-      if (predicate(job)) return true;
-    } catch {
-      // skip malformed
-    }
-  }
-  return false;
+export function stampStarted(filenameOrPath: string): void {
+  const db = getDb();
+  const filename = basename(filenameOrPath);
+  db.prepare("UPDATE jobs SET started_at = ?, status = 'processing' WHERE filename = ?")
+    .run(new Date().toISOString(), filename);
 }
 
-export async function isDuplicate(sessionId: string): Promise<boolean> {
-  return findInDone((job) => job.type === "session-mine" && job.sessionId === sessionId);
-}
-
-export async function isGitJobProcessed(headSha: string, repoPath: string): Promise<boolean> {
-  return findInDone(
-    (job) =>
-      (job.type === "git-push" || job.type === "git-pull") &&
-      job.headSha === headSha &&
-      job.repoPath === repoPath,
+export function completeJob(filenameOrPath: string, result: JobResult): string {
+  const db = getDb();
+  const filename = basename(filenameOrPath);
+  db.prepare(`
+    UPDATE jobs SET
+      status = 'done', completed_at = ?, duration_ms = ?,
+      transcript_tokens = ?, entries_created = ?,
+      input_tokens = ?, output_tokens = ?,
+      pipeline_data = ?
+    WHERE filename = ?
+  `).run(
+    new Date().toISOString(), result.durationMs,
+    result.transcriptTokens ?? null, result.entriesCreated ?? null,
+    result.inputTokens ?? null, result.outputTokens ?? null,
+    result.pipeline ? JSON.stringify(result.pipeline) : null,
+    filename,
   );
+  return filename;
 }
 
-export async function stampStarted(jobPath: string): Promise<void> {
-  const raw = await Bun.file(jobPath).text();
-  const job = RawJobRecord.parse(JSON.parse(raw));
-  job.startedAt = new Date().toISOString();
-  await Bun.write(jobPath, JSON.stringify(job, null, 2));
-}
-
-export async function completeJob(jobPath: string, result: JobResult): Promise<string> {
-  const raw = await Bun.file(jobPath).text();
-  const job = RawJobRecord.parse(JSON.parse(raw));
-  job.completedAt = new Date().toISOString();
-  job.durationMs = result.durationMs;
-  if (result.transcriptTokens !== undefined) job.transcriptTokens = result.transcriptTokens;
-  if (result.entriesCreated !== undefined) job.entriesCreated = result.entriesCreated;
-  if (result.inputTokens !== undefined) job.inputTokens = result.inputTokens;
-  if (result.outputTokens !== undefined) job.outputTokens = result.outputTokens;
-  if (result.pipeline !== undefined) job.pipeline = result.pipeline;
-  await Bun.write(jobPath, JSON.stringify(job, null, 2));
-  return moveJob(jobPath, DONE_DIR);
-}
-
-export async function failJob(jobPath: string, error: string, partialResult?: Partial<JobResult>): Promise<string> {
-  try {
-    const raw = await Bun.file(jobPath).text();
-    const job = RawJobRecord.parse(JSON.parse(raw));
-    job.error = error;
-    job.failedAt = new Date().toISOString();
-    if (partialResult?.pipeline !== undefined) job.pipeline = partialResult.pipeline;
-    await Bun.write(jobPath, JSON.stringify(job, null, 2));
-    return moveJob(jobPath, FAILED_DIR);
-  } catch {
-    const dest = join(FAILED_DIR, basename(jobPath));
-    const stub = { error, failedAt: new Date().toISOString(), originalPath: jobPath };
-    await Bun.write(dest, JSON.stringify(stub, null, 2));
-    return dest;
-  }
+export function failJob(filenameOrPath: string, error: string, partialResult?: Partial<JobResult>): string {
+  const db = getDb();
+  const filename = basename(filenameOrPath);
+  db.prepare(`
+    UPDATE jobs SET status = 'failed', error = ?, failed_at = ?, pipeline_data = ?
+    WHERE filename = ?
+  `).run(error, new Date().toISOString(), partialResult?.pipeline ? JSON.stringify(partialResult.pipeline) : null, filename);
+  return filename;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -212,8 +175,7 @@ export function jobTimestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-export async function enqueueRepoSync(repoPath: string): Promise<void> {
-  await ensureJobDirs();
+export function enqueueRepoSync(repoPath: string): void {
   const repoName = basename(repoPath);
   const syncJob: RepoSyncJob = {
     type: "repo-sync",
@@ -221,5 +183,5 @@ export async function enqueueRepoSync(repoPath: string): Promise<void> {
     cwd: repoPath,
     createdAt: new Date().toISOString(),
   };
-  await writeJob(PENDING_DIR, syncJob, `${jobTimestamp()}-sync-${repoName}.json`);
+  writeJob(syncJob, `${jobTimestamp()}-sync-${repoName}.json`);
 }

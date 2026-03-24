@@ -1,39 +1,35 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { z } from "zod";
+import { openDb, setDb } from "../db/connection.ts";
 import {
   readJob,
   writeJob,
-  moveJob,
   listJobs,
   failJob,
-  ensureJobDirs,
+  completeJob,
+  stampStarted,
+  isDuplicate,
   isGitJobProcessed,
-  DONE_DIR,
-  FAILED_DIR,
   type SessionMineJob,
   type GitPushJob,
 } from "./jobs.ts";
 
-let tempDir: string;
-let dirA: string;
-let dirB: string;
 
-beforeEach(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), "ctx-hive-jobs-test-"));
-  dirA = join(tempDir, "a");
-  dirB = join(tempDir, "b");
-  await Bun.write(join(dirA, ".keep"), ""); // mkdir via write
-  await Bun.write(join(dirB, ".keep"), "");
+let cleanup: (() => void) | null = null;
+
+beforeEach(() => {
+  const db = openDb(":memory:");
+  cleanup = () => {
+    const prev = setDb(null);
+    prev?.close();
+  };
+  setDb(db);
 });
 
-afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+afterEach(() => {
+  cleanup?.();
 });
 
-test("writeJob creates a valid JSON file", async () => {
+test("writeJob and readJob round-trip", () => {
   const job: SessionMineJob = {
     type: "session-mine",
     sessionId: "test-123",
@@ -42,65 +38,77 @@ test("writeJob creates a valid JSON file", async () => {
     createdAt: "2026-03-21T00:00:00.000Z",
   };
 
-  const path = await writeJob(dirA, job, "test-job.json");
-  const raw = await readFile(path, "utf-8");
-  const data = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
-
-  expect(data.type).toBe("session-mine");
-  expect(data.sessionId).toBe("test-123");
-  expect(data.cwd).toBe("/tmp/repo");
-});
-
-test("readJob parses a job file", async () => {
-  const job: SessionMineJob = {
-    type: "session-mine",
-    sessionId: "abc",
-    transcriptPath: "/tmp/t.jsonl",
-    cwd: "/tmp",
-    createdAt: "2026-03-21T00:00:00.000Z",
-  };
-  const path = await writeJob(dirA, job, "read-test.json");
-  const read = await readJob(path);
+  writeJob(job, "test-job.json");
+  const read = readJob("test-job.json");
 
   expect(read.type).toBe("session-mine");
   if (read.type !== "session-mine") throw new Error("unexpected type");
-  expect(read.sessionId).toBe("abc");
+  expect(read.sessionId).toBe("test-123");
+  expect(read.cwd).toBe("/tmp/repo");
 });
 
-test("moveJob moves file between directories", async () => {
-  await writeJob(dirA, { type: "session-mine", sessionId: "x", transcriptPath: "", cwd: "", createdAt: "now" }, "move-test.json");
-  const srcPath = join(dirA, "move-test.json");
+test("listJobs returns filenames for a status", () => {
+  writeJob({ type: "session-mine", sessionId: "a", transcriptPath: "", cwd: "", createdAt: "1" }, "002.json");
+  writeJob({ type: "session-mine", sessionId: "b", transcriptPath: "", cwd: "", createdAt: "2" }, "001.json");
+  writeJob({ type: "session-mine", sessionId: "c", transcriptPath: "", cwd: "", createdAt: "3" }, "003.json");
 
-  const destPath = await moveJob(srcPath, dirB);
-
-  expect(destPath).toBe(join(dirB, "move-test.json"));
-  const filesA = await readdir(dirA);
-  const filesB = await readdir(dirB);
-  expect(filesA).not.toContain("move-test.json");
-  expect(filesB).toContain("move-test.json");
-});
-
-test("listJobs returns sorted .json files", async () => {
-  await writeJob(dirA, { type: "session-mine", sessionId: "a", transcriptPath: "", cwd: "", createdAt: "1" }, "002.json");
-  await writeJob(dirA, { type: "session-mine", sessionId: "b", transcriptPath: "", cwd: "", createdAt: "2" }, "001.json");
-  await writeJob(dirA, { type: "session-mine", sessionId: "c", transcriptPath: "", cwd: "", createdAt: "3" }, "003.json");
-  await Bun.write(join(dirA, "not-json.txt"), "ignored");
-
-  const jobs = await listJobs(dirA);
+  const jobs = listJobs("pending");
 
   expect(jobs).toHaveLength(3);
-  expect(jobs[0]).toEndWith("001.json");
-  expect(jobs[2]).toEndWith("003.json");
+  expect(jobs[0]).toBe("002.json");
+  expect(jobs[2]).toBe("003.json");
 });
 
-test("listJobs returns empty array for missing directory", async () => {
-  const jobs = await listJobs(join(tempDir, "nonexistent"));
+test("listJobs returns empty array for unknown status", () => {
+  const jobs = listJobs("done");
   expect(jobs).toEqual([]);
 });
 
-test("isGitJobProcessed returns true when matching headSha+repoPath exists in done", async () => {
-  await ensureJobDirs();
+test("stampStarted updates status to processing", () => {
+  writeJob({ type: "session-mine", sessionId: "x", transcriptPath: "", cwd: "", createdAt: "now" }, "stamp-test.json");
 
+  stampStarted("stamp-test.json");
+
+  const processing = listJobs("processing");
+  expect(processing).toContain("stamp-test.json");
+
+  const pending = listJobs("pending");
+  expect(pending).not.toContain("stamp-test.json");
+});
+
+test("completeJob marks job as done", () => {
+  writeJob({ type: "session-mine", sessionId: "x", transcriptPath: "", cwd: "", createdAt: "now" }, "complete-test.json");
+  stampStarted("complete-test.json");
+
+  completeJob("complete-test.json", { success: true, durationMs: 1000, entriesCreated: 3 });
+
+  const done = listJobs("done");
+  expect(done).toContain("complete-test.json");
+});
+
+test("failJob marks job as failed with error", () => {
+  writeJob({ type: "session-mine", sessionId: "x", transcriptPath: "", cwd: "", createdAt: "now" }, "fail-test.json");
+
+  failJob("fail-test.json", "something went wrong");
+
+  const failed = listJobs("failed");
+  expect(failed).toContain("fail-test.json");
+
+  const pending = listJobs("pending");
+  expect(pending).not.toContain("fail-test.json");
+});
+
+test("isDuplicate detects completed session-mine jobs", () => {
+  writeJob({
+    type: "session-mine", sessionId: "dup-123", transcriptPath: "", cwd: "", createdAt: "now",
+  }, "dup-test.json");
+  completeJob("dup-test.json", { success: true, durationMs: 100 });
+
+  expect(isDuplicate("dup-123")).toBe(true);
+  expect(isDuplicate("other-id")).toBe(false);
+});
+
+test("isGitJobProcessed returns true when matching headSha+repoPath exists in done", () => {
   const job: GitPushJob = {
     type: "git-push",
     repoPath: "/Users/test/my-repo",
@@ -111,28 +119,10 @@ test("isGitJobProcessed returns true when matching headSha+repoPath exists in do
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  const path = await writeJob(DONE_DIR, job, "dedup-test.json");
+  writeJob(job, "dedup-test.json");
+  completeJob("dedup-test.json", { success: true, durationMs: 100 });
 
-  expect(await isGitJobProcessed("abc123def456", "/Users/test/my-repo")).toBe(true);
-  expect(await isGitJobProcessed("different-sha", "/Users/test/my-repo")).toBe(false);
-  expect(await isGitJobProcessed("abc123def456", "/Users/test/other-repo")).toBe(false);
-
-  // Clean up
-  await rm(path);
-});
-
-test("failJob appends error info and moves to failed dir", async () => {
-  await ensureJobDirs();
-  const path = await writeJob(dirA, { type: "session-mine", sessionId: "x", transcriptPath: "", cwd: "", createdAt: "now" }, "fail-test.json");
-
-  const failedPath = await failJob(path, "something went wrong");
-
-  expect(failedPath).toBe(join(FAILED_DIR, "fail-test.json"));
-  const raw = await readFile(failedPath, "utf-8");
-  const data = z.record(z.string(), z.unknown()).parse(JSON.parse(raw));
-  expect(data.error).toBe("something went wrong");
-  expect(data.failedAt).toBeTruthy();
-
-  // Clean up from real failed dir
-  await rm(failedPath);
+  expect(isGitJobProcessed("abc123def456", "/Users/test/my-repo")).toBe(true);
+  expect(isGitJobProcessed("different-sha", "/Users/test/my-repo")).toBe(false);
+  expect(isGitJobProcessed("abc123def456", "/Users/test/other-repo")).toBe(false);
 });

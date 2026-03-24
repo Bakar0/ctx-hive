@@ -87,11 +87,9 @@ export async function discoverRepos(
 ): Promise<DiscoveredRepo[]> {
   const root = expandHome(rootPath);
 
-  const [scanned, tracked, index] = await Promise.all([
-    scanForRepos(root, maxDepth),
-    loadTrackedRepos(),
-    loadIndex(),
-  ]);
+  const index = loadIndex();
+  const tracked = loadTrackedRepos();
+  const scanned = await scanForRepos(root, maxDepth);
 
   const contextCounts = buildContextCountMap(index);
 
@@ -139,10 +137,8 @@ export async function discoverRepos(
 // ── Enrich tracked repos ───────────────────────────────────────────────
 
 export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
-  const [tracked, index] = await Promise.all([
-    loadTrackedRepos(),
-    loadIndex(),
-  ]);
+  const index = loadIndex();
+  const tracked = loadTrackedRepos();
 
   const contextCounts = buildContextCountMap(index);
 

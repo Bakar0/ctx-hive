@@ -30,7 +30,6 @@ export class DashboardSocket {
 
     ws.onmessage = (e) => {
       try {
-        // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
         const raw = JSON.parse(String(e.data)) as { event: WsEvent; data: unknown };
         const handlers = this.handlers.get(raw.event);
         if (handlers != null) {

@@ -68,14 +68,14 @@ export const sessionIngestStage: StageDef<SessionIngestInput, SessionIngestOutpu
 
     const transcriptTokens = await extractTranscriptTokens(transcriptPath);
     const meta = await resolveRepoMeta(cwd);
-    const index = await loadIndex();
+    const index = loadIndex();
     const existing = index.filter(
       (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
     );
     const isUpdate = existing.length > 0;
 
     // Find served entries from search history
-    const historyEntries = await getSessionEntries(sessionId);
+    const historyEntries = getSessionEntries(sessionId);
     const servedEntries: ServedEntry[] = historyEntries
       .map((e) => {
         const entry = index.find((ie) => ie.id === e.id);
@@ -172,7 +172,7 @@ export const sessionExtractStage: StageDef<SessionIngestOutput & PrepareOutput, 
       throw new Error(taskResult.error);
     }
 
-    const indexAfter = await loadIndex();
+    const indexAfter = loadIndex();
     const createdEntries = indexAfter
       .filter((e) => !idsBefore.has(e.id))
       .map((e) => ({ id: e.id, title: e.title }));
@@ -263,7 +263,7 @@ export const summarizeStage: StageDef<SummarizeInput, SummarizeOutput> = {
     const extractResult = input.extract;
 
     // Count new entries by comparing current index to the count before extraction
-    const currentIndex = await loadIndex();
+    const currentIndex = loadIndex();
     const entriesCreated = Math.max(0, currentIndex.length - extractResult.indexBeforeCount);
 
     // Aggregate tokens from extraction and evaluation

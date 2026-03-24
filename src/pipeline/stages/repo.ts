@@ -33,7 +33,7 @@ export const repoIngestStage: StageDef<RepoIngestInput, RepoIngestOutput> = {
 
     const meta = await resolveRepoMeta(repoPath);
     const repoContext = await gatherRepoContext(repoPath);
-    const index = await loadIndex();
+    const index = loadIndex();
     const existing = index.filter(
       (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
     );
@@ -99,7 +99,7 @@ export const repoExtractStage: StageDef<RepoIngestOutput, RepoExtractOutput> = {
       },
     });
 
-    const indexAfter = await loadIndex();
+    const indexAfter = loadIndex();
     const createdEntries = indexAfter
       .filter((e) => !idsBefore.has(e.id))
       .map((e) => ({ id: e.id, title: e.title }));

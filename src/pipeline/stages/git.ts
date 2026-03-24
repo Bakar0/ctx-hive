@@ -37,7 +37,7 @@ export const gitIngestStage: StageDef<GitIngestInput, GitIngestOutput> = {
     const { repoPath, type: jobType, trigger } = input;
 
     const meta = await resolveRepoMeta(repoPath);
-    const index = await loadIndex();
+    const index = loadIndex();
     const existing = index.filter(
       (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
     );
@@ -139,7 +139,7 @@ export const gitExtractStage: StageDef<GitIngestOutput, GitExtractOutput> = {
       },
     });
 
-    const countAfter = (await loadIndex()).length;
+    const countAfter = loadIndex().length;
     const entriesCreated = Math.max(0, countAfter - countBefore);
     const taskResult = result.results[0];
 

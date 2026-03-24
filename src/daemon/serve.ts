@@ -1,34 +1,31 @@
-import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hiveRoot } from "../ctx/store.ts";
+import { getDb, closeDb } from "../db/connection.ts";
+import { seedFromFiles } from "../db/seed.ts";
 import { errorMessage } from "../git/run.ts";
 import {
-  ensureJobDirs,
   listJobs,
   readJob,
-  moveJob,
   failJob,
   isDuplicate,
   isGitJobProcessed,
   stampStarted,
   completeJob,
-  PENDING_DIR,
-  PROCESSING_DIR,
-  DONE_DIR,
 } from "./jobs.ts";
 import { getHandler } from "./handlers.ts";
 import { handleApiRequest } from "./api.ts";
-import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
+import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent } from "./ws.ts";
 import { loadTrackedRepos, findTrackedRepoFor } from "../repo/tracking.ts";
 import { recomputeAllScores } from "../ctx/signals.ts";
-import { ensureMessageDirs } from "../pipeline/messages.ts";
 import dashboardHtmlContent from "../../dashboard/dist/index.html" with { type: "text" };
 
 // ── Constants ─────────────────────────────────────────────────────────
 
 const PID_FILE = join(hiveRoot(), "daemon.pid");
+const PORT_FILE = join(hiveRoot(), "daemon.port");
 const POLL_INTERVAL_MS = 30_000;
+const DEBOUNCE_MS = 100;
 const DASHBOARD_PORT = 3939;
 
 // ── Logging ───────────────────────────────────────────────────────────
@@ -55,7 +52,8 @@ async function acquirePidLock(): Promise<boolean> {
         process.kill(pid, 0); // check if process is alive
         return false; // another daemon is running
       } catch {
-        // stale PID file, process is dead
+        // stale PID file, process is dead — clean up stale port file too
+        await unlink(PORT_FILE).catch(() => {});
       }
     }
     await writeFile(PID_FILE, String(process.pid));
@@ -78,75 +76,72 @@ async function releasePidLock(): Promise<void> {
 let maxConcurrency = 3;
 const inFlightJobs = new Set<Promise<void>>();
 
-async function processJob(jobPath: string): Promise<void> {
+async function processJob(filename: string): Promise<void> {
   let job;
   try {
-    job = await readJob(jobPath);
+    job = readJob(filename);
   } catch (err) {
-    log("error", `failed to read job ${jobPath}: ${errorMessage(err)}`);
-    try { await failJob(jobPath, "malformed job file"); } catch { /* file already gone */ }
+    log("error", `failed to read job ${filename}: ${errorMessage(err)}`);
+    try { failJob(filename, "malformed job file"); } catch { /* already handled */ }
     return;
   }
-
-  let processingPath: string | undefined;
 
   try {
     const handler = getHandler(job.type);
     if (!handler) {
       log("error", `no handler for job type: ${job.type}`);
-      await failJob(jobPath, `unknown job type: ${job.type}`);
+      failJob(filename, `unknown job type: ${job.type}`);
       return;
     }
 
     // Tracked repo filter — skip jobs from untracked repos
     const repoPath = "repoPath" in job ? job.repoPath : ("cwd" in job ? job.cwd : undefined);
     if (repoPath != null && repoPath !== "") {
-      const trackedRepos = await loadTrackedRepos();
+      const trackedRepos = loadTrackedRepos();
       if (!findTrackedRepoFor(repoPath, trackedRepos)) {
         log("info", `skipping job for untracked repo: ${repoPath}`);
-        await moveJob(jobPath, DONE_DIR);
+        completeJob(filename, { success: true, durationMs: 0 });
         return;
       }
     }
 
     // Duplicate check for session-mine jobs
     if (job.type === "session-mine") {
-      if (await isDuplicate(job.sessionId)) {
+      if (isDuplicate(job.sessionId)) {
         log("info", `skipping duplicate session: ${job.sessionId.slice(0, 8)}`);
-        await moveJob(jobPath, DONE_DIR);
+        completeJob(filename, { success: true, durationMs: 0 });
         return;
       }
     }
 
     // Duplicate check for git jobs (SHA-based)
     if (job.type === "git-push" || job.type === "git-pull") {
-      if (job.headSha !== "" && await isGitJobProcessed(job.headSha, job.repoPath)) {
+      if (job.headSha !== "" && isGitJobProcessed(job.headSha, job.repoPath)) {
         log("info", `skipping already-processed commit: ${job.headSha.slice(0, 8)} in ${job.repoPath}`);
-        await moveJob(jobPath, DONE_DIR);
+        completeJob(filename, { success: true, durationMs: 0 });
         return;
       }
     }
 
-    // Move to processing and stamp start time
-    processingPath = await moveJob(jobPath, PROCESSING_DIR);
-    await stampStarted(processingPath);
-    log("info", `processing: ${job.type} (${jobPath})`);
+    // Mark as processing
+    stampStarted(filename);
+    log("info", `processing: ${job.type} (${filename})`);
     broadcastJobEvent("job:started", job);
 
     const result = await handler(job);
     if (result.success) {
-      await completeJob(processingPath, result);
+      completeJob(filename, result);
       log("info", `completed: ${job.type} (${(result.durationMs / 1000).toFixed(1)}s)`);
       broadcastJobEvent("job:completed", job);
     } else {
-      await failJob(processingPath, result.error ?? "unknown error");
+      failJob(filename, result.error ?? "unknown error");
       log("error", `failed: ${job.type} — ${result.error}`);
       broadcastJobEvent("job:failed", job);
     }
   } catch (err) {
     const msg = errorMessage(err);
-    log("error", `job processing error for ${job.type} (${jobPath}): ${msg}`);
-    try { await failJob(processingPath ?? jobPath, msg); } catch { /* best-effort */ }
+    log("error", `job processing error for ${job.type} (${filename}): ${msg}`);
+    try { failJob(filename, msg); } catch { /* best-effort */ }
     broadcastJobEvent("job:failed", job);
   }
 }
@@ -158,15 +153,15 @@ async function drainPending(): Promise<void> {
   draining = true;
 
   try {
-    const jobs = await listJobs(PENDING_DIR);
-    for (const jobPath of jobs) {
+    const filenames = listJobs("pending");
+    for (const filename of filenames) {
       if (shuttingDown) break;
       if (inFlightJobs.size >= maxConcurrency) {
         await Promise.race(inFlightJobs);
       }
       if (shuttingDown) break;
 
-      const jobPromise = processJob(jobPath)
+      const jobPromise = processJob(filename)
         .catch((err) => {
           log("error", `unexpected job error: ${errorMessage(err)}`);
         })
@@ -180,24 +175,33 @@ async function drainPending(): Promise<void> {
   }
 }
 
+// ── Nudge-triggered drain ─────────────────────────────────────────────
+
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Debounced drain trigger — called by the nudge API endpoint. */
+export function triggerDrain(): void {
+  if (drainTimer !== null) return; // already scheduled
+  drainTimer = setTimeout(() => {
+    drainTimer = null;
+    void drainPending();
+  }, DEBOUNCE_MS);
+}
+
 // ── Orphan recovery ───────────────────────────────────────────────────
 
-async function recoverOrphans(): Promise<void> {
-  const orphans = await listJobs(PROCESSING_DIR);
-  for (const path of orphans) {
-    log("warn", `recovering orphaned job: ${path}`);
-    try {
-      await moveJob(path, PENDING_DIR);
-    } catch (err) {
-      log("error", `failed to recover orphan ${path}: ${errorMessage(err)}`);
-    }
+function recoverOrphans(): void {
+  const db = getDb();
+  // Reset any jobs stuck in 'processing' back to 'pending'
+  const result = db.prepare("UPDATE jobs SET status = 'pending', started_at = NULL WHERE status = 'processing'").run();
+  if (result.changes > 0) {
+    log("warn", `recovered ${result.changes} orphaned job(s) from processing`);
   }
 }
 
 // ── Dashboard HTML (embedded at build time) ──────────────────────────
 
-// oxlint-disable-next-line no-unsafe-type-assertion -- Bun text import is always a string at runtime
-const DASHBOARD_HTML = dashboardHtmlContent as unknown as string;
+const DASHBOARD_HTML = String(dashboardHtmlContent);
 const DASHBOARD_ETAG = `"${Bun.hash(DASHBOARD_HTML).toString(36)}"`;
 
 
@@ -214,9 +218,7 @@ function startHttpServer(port: number): void {
       // WebSocket upgrade
       if (url.pathname === "/ws") {
         const upgraded = server.upgrade(req, { data: {} });
-        // Bun.serve expects undefined for upgraded WebSocket connections
-        // oxlint-disable-next-line no-unsafe-type-assertion
-        if (upgraded) return undefined as unknown as Response;
+        if (upgraded) return;
         return new Response("WebSocket upgrade failed", { status: 400 });
       }
 
@@ -245,7 +247,6 @@ function startHttpServer(port: number): void {
 // ── Shutdown ──────────────────────────────────────────────────────────
 
 let shuttingDown = false;
-let watcher: FSWatcher | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 async function shutdown(): Promise<void> {
@@ -260,13 +261,14 @@ async function shutdown(): Promise<void> {
     httpServer = null;
   }
 
-  if (watcher) {
-    watcher.close();
-    watcher = null;
-  }
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
+  }
+
+  if (drainTimer) {
+    clearTimeout(drainTimer);
+    drainTimer = null;
   }
 
   // Wait for all in-flight jobs to complete
@@ -275,7 +277,9 @@ async function shutdown(): Promise<void> {
     await Promise.allSettled(inFlightJobs);
   }
 
+  closeDb();
   await releasePidLock();
+  await unlink(PORT_FILE).catch(() => {});
   log("info", "daemon stopped");
 }
 
@@ -296,8 +300,16 @@ export async function serve(args: string[]): Promise<void> {
     if (parsed > 0) maxConcurrency = parsed;
   }
 
-  await ensureJobDirs();
-  await ensureMessageDirs();
+  // Initialize database and seed from existing files if needed
+  getDb();
+  try {
+    const seedResult = await seedFromFiles(getDb());
+    if (!seedResult.skipped) {
+      log("info", `seeded DB: ${seedResult.entries} entries, ${seedResult.jobs} jobs, ${seedResult.pipelines} pipelines`);
+    }
+  } catch (err) {
+    log("error", `DB seed failed: ${errorMessage(err)}`);
+  }
 
   const acquired = await acquirePidLock();
   if (!acquired) {
@@ -314,22 +326,23 @@ export async function serve(args: string[]): Promise<void> {
     log("error", `unhandled rejection: ${errorMessage(reason)}`);
   });
 
-  log("info", `daemon started (pid ${process.pid}, concurrency ${maxConcurrency}), watching ${PENDING_DIR}`);
+  log("info", `daemon started (pid ${process.pid}, concurrency ${maxConcurrency})`);
 
   // Start the HTTP + WebSocket server
   startHttpServer(port);
+  await writeFile(PORT_FILE, String(port));
   startMetricsBroadcast(5_000);
 
   // Recover orphaned jobs from previous crash
   try {
-    await recoverOrphans();
+    recoverOrphans();
   } catch (err) {
     log("error", `orphan recovery failed: ${errorMessage(err)}`);
   }
 
   // Recompute signal scores and prune stale data
   try {
-    await recomputeAllScores();
+    recomputeAllScores();
   } catch (err) {
     log("error", `score recomputation failed: ${errorMessage(err)}`);
   }
@@ -341,14 +354,7 @@ export async function serve(args: string[]): Promise<void> {
     log("error", `initial drain failed: ${errorMessage(err)}`);
   }
 
-  // Watch for new jobs
-  watcher = watch(PENDING_DIR, () => {
-    debug("fs.watch triggered");
-    markMetricsDirty();
-    void drainPending();
-  });
-
-  // Fallback poll (fs.watch can be unreliable)
+  // Poll for new jobs (DB-backed — no file watcher needed)
   pollTimer = setInterval(() => {
     debug("poll sweep");
     void drainPending();

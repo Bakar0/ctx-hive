@@ -1,15 +1,14 @@
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import {
-  ensureJobDirs,
   writeJob,
   jobTimestamp,
-  PENDING_DIR,
   type SessionMineJob,
   type GitPushJob,
   type GitPullJob,
 } from "../daemon/jobs.ts";
 import { getFlag, readStdin } from "../cli/args.ts";
+import { hiveRoot } from "../ctx/store.ts";
 
 const HookPayloadSchema = z.object({
   session_id: z.string(),
@@ -22,10 +21,26 @@ function jobFilename(prefix: string): string {
   return `${jobTimestamp()}-${prefix}.json`;
 }
 
+/** Fire-and-forget HTTP nudge to the daemon so it drains pending jobs immediately. */
+async function nudgeDaemon(): Promise<void> {
+  try {
+    let port = 3939;
+    try {
+      const content = await Bun.file(join(hiveRoot(), "daemon.port")).text();
+      const parsed = parseInt(content.trim(), 10);
+      if (parsed > 0) port = parsed;
+    } catch { /* port file missing — use default */ }
+    await fetch(`http://localhost:${String(port)}/api/jobs/nudge`, {
+      method: "POST",
+      signal: AbortSignal.timeout(1000),
+    });
+  } catch { /* daemon may be down — job stays in DB for poll pickup */ }
+}
+
 // ── Enqueue entry point ──────────────────────────────────────────────
 
 /**
- * Reads hook payload and writes a job file.
+ * Reads hook payload and writes a job to the DB.
  * Usage: ctx-hive enqueue <job-type> [args...]
  */
 export async function enqueue(args: string[]): Promise<void> {
@@ -69,8 +84,6 @@ async function enqueueSessionMine(): Promise<void> {
     process.exit(0);
   }
 
-  await ensureJobDirs();
-
   const prefix = (payload.session_id ?? "unknown").slice(0, 8);
 
   const job: SessionMineJob = {
@@ -82,7 +95,8 @@ async function enqueueSessionMine(): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  await writeJob(PENDING_DIR, job, jobFilename(prefix));
+  writeJob(job, jobFilename(prefix));
+  await nudgeDaemon();
 }
 
 // ── git-push ─────────────────────────────────────────────────────────
@@ -114,8 +128,6 @@ async function enqueueGitPush(args: string[]): Promise<void> {
     }
   }
 
-  await ensureJobDirs();
-
   const repoName = basename(repoPath);
   const job: GitPushJob = {
     type: "git-push",
@@ -127,7 +139,8 @@ async function enqueueGitPush(args: string[]): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  await writeJob(PENDING_DIR, job, jobFilename(`push-${repoName}`));
+  writeJob(job, jobFilename(`push-${repoName}`));
+  await nudgeDaemon();
 }
 
 // ── git-pull ─────────────────────────────────────────────────────────
@@ -160,8 +173,6 @@ async function enqueueGitPull(args: string[]): Promise<void> {
     }
   }
 
-  await ensureJobDirs();
-
   const repoName = basename(repoPath);
   const job: GitPullJob = {
     type: "git-pull",
@@ -173,5 +184,6 @@ async function enqueueGitPull(args: string[]): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  await writeJob(PENDING_DIR, job, jobFilename(`pull-${repoName}`));
+  writeJob(job, jobFilename(`pull-${repoName}`));
+  await nudgeDaemon();
 }

@@ -1,7 +1,6 @@
 import { join, resolve } from "node:path";
 import { mkdir, chmod, rm } from "node:fs/promises";
 import { hiveRoot } from "../ctx/store.ts";
-import { ensureJobDirs } from "../daemon/jobs.ts";
 import { loadTrackedRepos } from "../repo/tracking.ts";
 import {
   HOOK_SCRIPTS,
@@ -58,10 +57,7 @@ async function resolveCtxHiveBin(): Promise<string> {
 export async function installGitHooks(args: string[]): Promise<void> {
   const force = args.includes("--force");
 
-  // 1. Ensure job directories exist
-  await ensureJobDirs();
-
-  // 2. Check existing core.hooksPath
+  // 1. Check existing core.hooksPath
   const currentPath = await getGlobalHooksPath();
   if (currentPath === GIT_HOOKS_DIR && !force) {
     console.log("Git hooks are already installed.");
@@ -259,7 +255,7 @@ export async function patchRepoHooks(repoPath: string): Promise<boolean> {
  * Patch all tracked repos that have local core.hooksPath overrides.
  */
 export async function patchAllTrackedRepoHooks(): Promise<void> {
-  const repos = await loadTrackedRepos();
+  const repos = loadTrackedRepos();
   for (const repo of repos) {
     const patched = await patchRepoHooks(repo.absPath);
     if (patched) {

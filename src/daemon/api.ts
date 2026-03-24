@@ -2,27 +2,21 @@
  * REST API endpoints for the ctx-hive dashboard.
  * Provides read access to jobs, contexts, pipelines, and metrics.
  */
-import { join, basename } from "node:path";
-import { unlink } from "node:fs/promises";
+import { basename } from "node:path";
 import { z } from "zod";
+import { getDb } from "../db/connection.ts";
 import {
   loadIndex,
+  loadIndexEntries,
   deleteEntry,
   resolveEntry,
-  hiveRoot,
-  parseFrontmatter,
   type IndexEntry,
   isScope,
   SCOPES,
 } from "../ctx/store.ts";
 import {
-  PENDING_DIR,
-  PROCESSING_DIR,
-  DONE_DIR,
-  FAILED_DIR,
-  listJobs,
-  RawJobFileSchema,
   enqueueRepoSync,
+  JOB_STATUSES,
   type JobStatus,
 } from "./jobs.ts";
 import {
@@ -37,9 +31,10 @@ import {
   discoverRepos,
   enrichTrackedRepos,
 } from "../repo/scanner.ts";
-import { broadcastRepoEvent } from "./ws.ts";
+import { broadcastRepoEvent, markMetricsDirty } from "./ws.ts";
+import { triggerDrain } from "./serve.ts";
 import { errorMessage } from "../git/run.ts";
-import { listExecutionIds, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
+import { listExecutions, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
 import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -118,92 +113,68 @@ function projectFromCwd(cwd?: string): string {
 const RepoBodySchema = z.object({ absPath: z.string().min(1) });
 const RepoOpenBodySchema = z.object({ absPath: z.string().min(1), target: z.string().optional() });
 
-async function loadJobsFromDir(
-  dir: string,
-  status: JobView["status"]
-): Promise<JobView[]> {
-  const paths = await listJobs(dir);
-  const results = await Promise.all(
-    paths.map(async (p): Promise<JobView | null> => {
-      try {
-        const raw = await Bun.file(p).text();
-        const data = RawJobFileSchema.parse(JSON.parse(raw));
-        return {
-          filename: basename(p),
-          status,
-          type: data.type ?? "unknown",
-          createdAt: data.createdAt ?? "",
-          sessionId: data.sessionId,
-          cwd: data.cwd,
-          project: projectFromCwd(data.cwd ?? data.repoPath),
-          reason: data.reason,
-          error: data.error,
-          failedAt: data.failedAt,
-          startedAt: data.startedAt,
-          completedAt: data.completedAt,
-          durationMs: data.durationMs,
-          transcriptTokens: data.transcriptTokens,
-          entriesCreated: data.entriesCreated,
-          inputTokens: data.inputTokens,
-          outputTokens: data.outputTokens,
-          pipeline: data.pipeline,
-        };
-      } catch {
-        return null;
-      }
-    }),
-  );
-  return results.filter((j): j is JobView => j !== null);
-}
-
 // ── API Functions ─────────────────────────────────────────────────────
 
-export async function getAllJobs(): Promise<JobView[]> {
-  const [pending, processing, done, failed] = await Promise.all([
-    loadJobsFromDir(PENDING_DIR, "pending"),
-    loadJobsFromDir(PROCESSING_DIR, "processing"),
-    loadJobsFromDir(DONE_DIR, "done"),
-    loadJobsFromDir(FAILED_DIR, "failed"),
-  ]);
-  const all = [...processing, ...pending, ...done, ...failed];
-  // Sort by createdAt descending
-  all.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-  return all;
+interface JobDbRow {
+  filename: string; type: string; status: string; payload: string;
+  error: string | null; created_at: string; started_at: string | null;
+  completed_at: string | null; failed_at: string | null;
+  duration_ms: number | null; transcript_tokens: number | null;
+  entries_created: number | null; input_tokens: number | null;
+  output_tokens: number | null; pipeline_data: string | null;
 }
 
-export async function getContexts(params: {
+const JobStatusSchema = z.enum(JOB_STATUSES);
+const PayloadSchema = z.record(z.string(), z.string().optional());
+const PipelineDataSchema = z.unknown();
+
+function jobDbRowToView(r: JobDbRow): JobView {
+  const payload = PayloadSchema.parse(JSON.parse(r.payload));
+  return {
+    filename: r.filename,
+    status: JobStatusSchema.parse(r.status),
+    type: r.type,
+    createdAt: r.created_at,
+    sessionId: payload.sessionId,
+    cwd: payload.cwd,
+    project: projectFromCwd(payload.cwd ?? payload.repoPath),
+    reason: payload.reason,
+    error: r.error ?? undefined,
+    failedAt: r.failed_at ?? undefined,
+    startedAt: r.started_at ?? undefined,
+    completedAt: r.completed_at ?? undefined,
+    durationMs: r.duration_ms ?? undefined,
+    transcriptTokens: r.transcript_tokens ?? undefined,
+    entriesCreated: r.entries_created ?? undefined,
+    inputTokens: r.input_tokens ?? undefined,
+    outputTokens: r.output_tokens ?? undefined,
+    pipeline: r.pipeline_data !== null ? PipelineDataSchema.parse(JSON.parse(r.pipeline_data)) : undefined,
+  };
+}
+
+export function getAllJobs(): JobView[] {
+  const db = getDb();
+  const rows = db.prepare<JobDbRow, []>("SELECT * FROM jobs ORDER BY created_at DESC").all();
+  return rows.map(jobDbRowToView);
+}
+
+export function getContexts(params: {
   scope?: string;
   project?: string;
   sortBy?: "time" | "project";
-}): Promise<(IndexEntry & { body: string })[]> {
-  const index = await loadIndex();
-  let entries = [...index];
+}): (IndexEntry & { body: string })[] {
+  let full = loadIndexEntries();
 
   if (params.scope != null && params.scope !== "" && (SCOPES as readonly string[]).includes(params.scope)) {
-    entries = entries.filter((e) => e.scope === params.scope);
+    full = full.filter((e) => e.scope === params.scope);
   }
   if (params.project != null && params.project !== "") {
-    entries = entries.filter((e) => e.project === params.project);
+    full = full.filter((e) => e.project === params.project);
   }
-
-  // Load bodies
-  const root = hiveRoot();
-  const full = await Promise.all(
-    entries.map(async (e) => {
-      try {
-        const raw = await Bun.file(join(root, e.path)).text();
-        const { body } = parseFrontmatter(raw);
-        return { ...e, body };
-      } catch {
-        return { ...e, body: "" };
-      }
-    })
-  );
 
   if (params.sortBy === "project") {
     full.sort((a, b) => a.project.localeCompare(b.project) || b.updated.localeCompare(a.updated));
   } else {
-    // default: sort by time (updated) descending
     full.sort((a, b) => b.updated.localeCompare(a.updated));
   }
 
@@ -211,34 +182,56 @@ export async function getContexts(params: {
 }
 
 export async function getMetrics(): Promise<MetricsSnapshot> {
-  const [allJobs, index] = await Promise.all([getAllJobs(), loadIndex()]);
+  const db = getDb();
 
-  const counts = { pending: 0, processing: 0, done: 0, failed: 0 };
-  for (const j of allJobs) {
-    counts[j.status]++;
-  }
+  // Job counts by status
+  const jobCounts = db.prepare<{ status: string; cnt: number }, []>(
+    "SELECT status, COUNT(*) as cnt FROM jobs GROUP BY status",
+  ).all();
+  const statusMap = new Map(jobCounts.map((r) => [r.status, r.cnt]));
+  const jobsPending = statusMap.get("pending") ?? 0;
+  const jobsProcessing = statusMap.get("processing") ?? 0;
+  const jobsDone = statusMap.get("done") ?? 0;
+  const jobsFailed = statusMap.get("failed") ?? 0;
+  const total = jobsPending + jobsProcessing + jobsDone + jobsFailed;
 
+  // Entry counts by scope and project
+  const scopeCounts = db.prepare<{ scope: string; cnt: number }, []>(
+    "SELECT scope, COUNT(*) as cnt FROM entries GROUP BY scope",
+  ).all();
   const byScope: Record<string, number> = {};
-  const byProject: Record<string, number> = {};
-  for (const e of index) {
-    byScope[e.scope] = (byScope[e.scope] ?? 0) + 1;
-    if (e.project) {
-      byProject[e.project] = (byProject[e.project] ?? 0) + 1;
-    }
+  let contextTotal = 0;
+  for (const row of scopeCounts) {
+    byScope[row.scope] = row.cnt;
+    contextTotal += row.cnt;
   }
+
+  const projectCounts = db.prepare<{ project: string; cnt: number }, []>(
+    "SELECT project, COUNT(*) as cnt FROM entries WHERE project != '' GROUP BY project",
+  ).all();
+  const byProject: Record<string, number> = {};
+  for (const row of projectCounts) {
+    byProject[row.project] = row.cnt;
+  }
+
+  // Recent jobs (only fetch 20)
+  const recentRows = db.prepare<JobDbRow, []>(
+    "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 20",
+  ).all();
+  const recentJobs = recentRows.map(jobDbRowToView);
 
   return {
     timestamp: new Date().toISOString(),
-    jobs: { ...counts, total: allJobs.length },
-    contexts: { total: index.length, byScope, byProject },
-    recentJobs: allJobs.slice(0, 20),
+    jobs: { pending: jobsPending, processing: jobsProcessing, done: jobsDone, failed: jobsFailed, total },
+    contexts: { total: contextTotal, byScope, byProject },
+    recentJobs,
   };
 }
 
-export async function deleteContextById(idOrSlug: string): Promise<boolean> {
-  const resolved = await resolveEntry(idOrSlug);
+export function deleteContextById(idOrSlug: string): boolean {
+  const resolved = resolveEntry(idOrSlug);
   if (!resolved) return false;
-  await deleteEntry(resolved.scope, resolved.slug);
+  deleteEntry(resolved.scope, resolved.slug);
   return true;
 }
 
@@ -262,13 +255,13 @@ export interface SessionSummary {
   evaluationComplete: boolean;
 }
 
-export async function getSessionSummaries(opts?: {
+export function getSessionSummaries(opts?: {
   project?: string;
   since?: Date;
   limit?: number;
-}): Promise<SessionSummary[]> {
-  const records = await loadSearchHistory();
-  const signals = await loadSignals();
+}): SessionSummary[] {
+  const records = loadSearchHistory();
+  const signals = loadSignals();
 
   // Group inject records by sessionId
   const sessionMap = new Map<string, {
@@ -383,23 +376,25 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
   // GET /api/jobs
   if (path === "/api/jobs" && req.method === "GET") {
-    return json(await getAllJobs());
+    return json(getAllJobs());
   }
 
   // POST /api/jobs/:filename/requeue
   const requeueMatch = /^\/api\/jobs\/(.+)\/requeue$/.exec(path);
   if (requeueMatch && req.method === "POST") {
     const filename = decodeURIComponent(requeueMatch[1]!);
-    const failedPath = join(FAILED_DIR, filename);
-    const file = Bun.file(failedPath);
-    if (!(await file.exists())) return json({ error: "Job not found in failed/" }, 404);
-    const data: Record<string, unknown> = RawJobFileSchema.passthrough().parse(JSON.parse(await file.text()));
-    // Strip processing metadata so the job is treated as fresh
-    for (const key of ["error", "failedAt", "startedAt", "completedAt", "durationMs", "entriesCreated", "inputTokens", "outputTokens", "transcriptTokens", "pipeline"]) {
-      delete data[key];
-    }
-    await Bun.write(join(PENDING_DIR, filename), JSON.stringify(data, null, 2));
-    await unlink(failedPath);
+    const db = getDb();
+    const result = db.prepare(
+      "UPDATE jobs SET status = 'pending', error = NULL, failed_at = NULL, started_at = NULL, completed_at = NULL, duration_ms = NULL, entries_created = NULL, input_tokens = NULL, output_tokens = NULL, transcript_tokens = NULL, pipeline_data = NULL WHERE filename = ? AND status = 'failed'",
+    ).run(filename);
+    if (result.changes === 0) return json({ error: "Job not found in failed/" }, 404);
+    return json({ ok: true });
+  }
+
+  // POST /api/jobs/nudge — trigger immediate drain of pending jobs
+  if (path === "/api/jobs/nudge" && req.method === "POST") {
+    markMetricsDirty();
+    triggerDrain();
     return json({ ok: true });
   }
 
@@ -409,28 +404,28 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const project = url.searchParams.get("project") ?? undefined;
     const sortByParam = url.searchParams.get("sortBy");
     const sortBy = sortByParam === "project" ? "project" : "time";
-    return json(await getContexts({ scope, project, sortBy }));
+    return json(getContexts({ scope, project, sortBy }));
   }
 
   // DELETE /api/contexts/:id
   const deleteMatch = /^\/api\/contexts\/(.+)$/.exec(path);
   if (deleteMatch && req.method === "DELETE") {
     const id = decodeURIComponent(deleteMatch[1]!);
-    const deleted = await deleteContextById(id);
+    const deleted = deleteContextById(id);
     if (deleted) return json({ ok: true });
     return json({ error: "Not found" }, 404);
   }
 
   // GET /api/projects — unique project list
   if (path === "/api/projects" && req.method === "GET") {
-    const index = await loadIndex();
+    const index = loadIndex();
     const projects = [...new Set(index.map((e) => e.project).filter(Boolean))].sort();
     return json(projects);
   }
 
   // GET /api/signals
   if (path === "/api/signals" && req.method === "GET") {
-    return json(await loadSignals());
+    return json(loadSignals());
   }
 
   // ── Search endpoints ──────────────────────────────────────────────────
@@ -449,7 +444,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const rawSource = url.searchParams.get("source");
     const source: SearchSource = rawSource === "inject" ? "inject" : rawSource === "cli" ? "cli" : "api";
     const sessionId = url.searchParams.get("sessionId") ?? undefined;
-    const results = await search(q, filters, limit, { source, sessionId, project });
+    const results = search(q, filters, limit, { source, sessionId, project });
     return json({ query: q, results });
   }
 
@@ -459,12 +454,12 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const limitParam = url.searchParams.get("limit");
     const since = sinceParam !== null && sinceParam !== "" ? new Date(sinceParam) : undefined;
     const limit = limitParam !== null && limitParam !== "" ? parseInt(limitParam, 10) : undefined;
-    return json(await loadSearchHistory({ since, limit }));
+    return json(loadSearchHistory({ since, limit }));
   }
 
   // GET /api/search-stats
   if (path === "/api/search-stats" && req.method === "GET") {
-    return json(await getSearchStats());
+    return json(getSearchStats());
   }
 
   // ── Session endpoints ──────────────────────────────────────────────────
@@ -476,7 +471,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const limitParam = url.searchParams.get("limit");
     const since = sinceParam !== null && sinceParam !== "" ? new Date(sinceParam) : undefined;
     const limit = limitParam !== null && limitParam !== "" ? parseInt(limitParam, 10) : undefined;
-    return json(await getSessionSummaries({ project: projectFilter, since, limit }));
+    return json(getSessionSummaries({ project: projectFilter, since, limit }));
   }
 
   // ── Repo endpoints ───────────────────────────────────────────────────
@@ -504,7 +499,8 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       if (!result.success) return json({ error: "absPath required" }, 400);
       const tracked = await trackRepo(result.data.absPath);
       broadcastRepoEvent("repo:tracked", tracked);
-      await enqueueRepoSync(result.data.absPath);
+      enqueueRepoSync(result.data.absPath);
+      triggerDrain();
       return json(tracked);
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
@@ -516,7 +512,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     try {
       const result = RepoBodySchema.safeParse(await req.json());
       if (!result.success) return json({ error: "absPath required" }, 400);
-      const removed = await untrackRepo(result.data.absPath);
+      const removed = untrackRepo(result.data.absPath);
       if (!removed) return json({ error: "Not tracked" }, 404);
       broadcastRepoEvent("repo:untracked", { absPath: result.data.absPath });
       return json({ ok: true });
@@ -530,8 +526,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     try {
       const result = RepoBodySchema.safeParse(await req.json());
       if (!result.success) return json({ error: "absPath required" }, 400);
-      await updateLastScanned(result.data.absPath);
-      await enqueueRepoSync(result.data.absPath);
+      updateLastScanned(result.data.absPath);
+      enqueueRepoSync(result.data.absPath);
+      triggerDrain();
       return json({ ok: true, message: "Sync job enqueued" });
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
@@ -574,24 +571,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const statusFilter = url.searchParams.get("status") ?? undefined;
     const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
 
-    const executionIds = await listExecutionIds();
-    const executions: PipelineExecution[] = [];
-
-    for (const id of executionIds) {
-      try {
-        const manifest = await readManifest(id);
-        const execution = normalizeExecution(PipelineExecutionSchema.parse(manifest));
-        if (projectFilter !== undefined && execution.project !== projectFilter) continue;
-        if (statusFilter !== undefined && execution.status !== statusFilter) continue;
-        executions.push(execution);
-      } catch {
-        // skip malformed manifests
-      }
-    }
-
-    // Sort by startedAt descending
-    executions.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    return json(executions.slice(0, limit));
+    const manifests = listExecutions({ project: projectFilter, status: statusFilter, limit });
+    const executions = manifests.map((m) => normalizeExecution(PipelineExecutionSchema.parse(m)));
+    return json(executions);
   }
 
   // GET /api/pipelines/:executionId
@@ -599,7 +581,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   if (pipelineMatch && req.method === "GET") {
     const executionId = decodeURIComponent(pipelineMatch[1]!);
     try {
-      const manifest = await readManifest(executionId);
+      const manifest = readManifest(executionId);
       return json(normalizeExecution(PipelineExecutionSchema.parse(manifest)));
     } catch {
       return json({ error: "Not found" }, 404);
@@ -612,7 +594,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const executionId = decodeURIComponent(messageMatch[1]!);
     const stageName = decodeURIComponent(messageMatch[2]!);
     try {
-      const data = await readMessage(executionId, stageName);
+      const data = readMessage(executionId, stageName);
       return json(data);
     } catch {
       return json({ error: "Not found" }, 404);
@@ -621,32 +603,25 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
   // GET /api/pipeline-stats
   if (path === "/api/pipeline-stats" && req.method === "GET") {
-    const executionIds = await listExecutionIds();
+    const manifests = listExecutions();
     const stageDurations: Record<string, number[]> = {};
     const stageFailures: Record<string, { total: number; failed: number }> = {};
     let completed = 0;
     let failed = 0;
-    let total = 0;
 
-    for (const id of executionIds) {
-      try {
-        const manifest = await readManifest(id);
-        const execution = PipelineExecutionSchema.parse(manifest);
-        total++;
-        if (execution.status === "completed") completed++;
-        if (execution.status === "failed") failed++;
+    for (const manifest of manifests) {
+      const execution = PipelineExecutionSchema.parse(manifest);
+      if (execution.status === "completed") completed++;
+      if (execution.status === "failed") failed++;
 
-        for (const stage of execution.stages) {
-          const name = canonicalStageName(stage.name);
-          if (stage.durationMs !== undefined) {
-            (stageDurations[name] ??= []).push(stage.durationMs);
-          }
-          const s = (stageFailures[name] ??= { total: 0, failed: 0 });
-          s.total++;
-          if (stage.status === "failed") s.failed++;
+      for (const stage of execution.stages) {
+        const name = canonicalStageName(stage.name);
+        if (stage.durationMs !== undefined) {
+          (stageDurations[name] ??= []).push(stage.durationMs);
         }
-      } catch {
-        // skip
+        const s = (stageFailures[name] ??= { total: 0, failed: 0 });
+        s.total++;
+        if (stage.status === "failed") s.failed++;
       }
     }
 
@@ -660,6 +635,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       stageFailureRates[name] = counts.total > 0 ? counts.failed / counts.total : 0;
     }
 
+    const total = manifests.length;
     return json({
       total,
       completed,

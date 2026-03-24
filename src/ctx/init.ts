@@ -308,11 +308,11 @@ export async function gatherRepoContext(repoPath: string): Promise<RepoContext> 
 
 // ── Check existing context ─────────────────────────────────────────────
 
-export async function checkExistingContext(
+export function checkExistingContext(
   projectName: string,
   preloadedIndex?: IndexEntry[],
-): Promise<IndexEntry[]> {
-  const index = preloadedIndex ?? await loadIndex();
+): IndexEntry[] {
+  const index = preloadedIndex ?? loadIndex();
   return index.filter(
     (e) =>
       e.project === projectName ||
@@ -322,11 +322,11 @@ export async function checkExistingContext(
 
 // ── Project Overview lookup ────────────────────────────────────────────
 
-export async function findProjectOverview(
+export function findProjectOverview(
   projectName: string,
   preloadedIndex?: IndexEntry[],
-): Promise<IndexEntry | null> {
-  const index = preloadedIndex ?? await loadIndex();
+): IndexEntry | null {
+  const index = preloadedIndex ?? loadIndex();
   return (
     index.find(
       (e) => e.project === projectName && e.tags.includes("project-overview"),
@@ -751,10 +751,10 @@ async function processRepo(
   }
 
   // 3. Check existing context (load index once)
-  const index = await loadIndex();
-  const existing = await checkExistingContext(meta.name, index);
+  const index = loadIndex();
+  const existing = checkExistingContext(meta.name, index);
   const isUpdate = existing.length > 0;
-  const overviewEntry = await findProjectOverview(meta.name, index);
+  const overviewEntry = findProjectOverview(meta.name, index);
   if (verbose) console.log(`  Existing entries: ${existing.length} (${isUpdate ? "update" : "init"} mode), overview: ${overviewEntry ? overviewEntry.id : "none"}`);
 
   // 4. Discover session files

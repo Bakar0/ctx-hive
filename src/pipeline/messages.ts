@@ -1,6 +1,5 @@
-import { z } from "zod";
 import { getDb } from "../db/connection.ts";
-import type { PipelineExecution, StageMetrics } from "./schema.ts";
+import { StageMetricsSchema, type PipelineExecution, type StageMetrics } from "./schema.ts";
 
 // ── Stage name backward compatibility ────────────────────────────────
 
@@ -19,32 +18,23 @@ export function canonicalStageName(name: string): string {
   return STAGE_NAME_ALIASES[name] ?? name;
 }
 
-/** Returns all legacy names that map to the given canonical name. */
-function legacyNamesFor(canonical: string): string[] {
-  const names: string[] = [];
+/** Returns all names to search for a given canonical name (canonical + legacy aliases). */
+function allNamesFor(canonical: string): string[] {
+  const names = [canonical];
   for (const [old, current] of Object.entries(STAGE_NAME_ALIASES)) {
     if (current === canonical) names.push(old);
   }
   return names;
 }
 
-// ── No-op legacy exports ─────────────────────────────────────────────
-
-export function messagesRoot(): string {
-  return "";
-}
-
-export function executionDir(_executionId: string): string {
-  return "";
-}
-
-export function ensureMessageDirs(): void {
-  // No-op — DB handles storage
-}
-
-export function createExecutionDir(_executionId: string): string {
-  // No-op — execution is created via writeManifest
-  return "";
+/** Finds a pipeline_messages row by execution ID and stage name (including legacy aliases). */
+function findMessageRow(executionId: string, stageName: string): { data: string } | null {
+  const db = getDb();
+  const names = allNamesFor(stageName);
+  const placeholders = names.map(() => "?").join(",");
+  return db.prepare<{ data: string }, (string)[]>(
+    `SELECT data FROM pipeline_messages WHERE execution_id = ? AND stage_name IN (${placeholders}) LIMIT 1`,
+  ).get(executionId, ...names) ?? null;
 }
 
 // ── Message I/O ──────────────────────────────────────────────────────
@@ -65,47 +55,18 @@ export function writeMessage(
 }
 
 export function readMessage(executionId: string, stageName: string): unknown {
-  const db = getDb();
-
-  // Try canonical name first
-  const row = db.prepare<{ data: string }, [string, string]>(
-    "SELECT data FROM pipeline_messages WHERE execution_id = ? AND stage_name = ?",
-  ).get(executionId, stageName);
-
+  const row = findMessageRow(executionId, stageName);
   if (row) return JSON.parse(row.data);
-
-  // Fallback: try legacy stage names
-  for (const legacy of legacyNamesFor(stageName)) {
-    const legacyRow = db.prepare<{ data: string }, [string, string]>(
-      "SELECT data FROM pipeline_messages WHERE execution_id = ? AND stage_name = ?",
-    ).get(executionId, legacy);
-    if (legacyRow) return JSON.parse(legacyRow.data);
-  }
-
   throw new Error(`Message not found: ${stageName} for execution ${executionId}`);
 }
 
 export function messageExists(executionId: string, stageName: string): boolean {
-  const db = getDb();
-  const row = db.prepare<{ cnt: number }, [string, string]>(
-    "SELECT COUNT(*) as cnt FROM pipeline_messages WHERE execution_id = ? AND stage_name = ?",
-  ).get(executionId, stageName);
-  if (row !== null && row.cnt > 0) return true;
-
-  // Check legacy names
-  for (const legacy of legacyNamesFor(stageName)) {
-    const legacyRow = db.prepare<{ cnt: number }, [string, string]>(
-      "SELECT COUNT(*) as cnt FROM pipeline_messages WHERE execution_id = ? AND stage_name = ?",
-    ).get(executionId, legacy);
-    if (legacyRow !== null && legacyRow.cnt > 0) return true;
-  }
-  return false;
+  return findMessageRow(executionId, stageName) !== null;
 }
 
 // ── Manifest I/O ─────────────────────────────────────────────────────
 
-export function writeManifest(executionId: string, manifest: PipelineExecution): void {
-  const exec = manifest;
+export function writeManifest(executionId: string, exec: PipelineExecution): void {
   const db = getDb();
 
   const tx = db.transaction(() => {
@@ -151,7 +112,7 @@ interface StageRow {
   duration_ms: number | null; retry_count: number; error: string | null; metrics: string;
 }
 
-const MetricsSchema = z.record(z.string(), z.unknown());
+const MetricsSchema = StageMetricsSchema.passthrough();
 
 export function readManifest(executionId: string): unknown {
   const db = getDb();
@@ -198,6 +159,82 @@ export function listExecutionIds(): string[] {
   const db = getDb();
   const rows = db.prepare<{ id: string }, []>("SELECT id FROM pipeline_executions ORDER BY started_at DESC").all();
   return rows.map((r) => r.id);
+}
+
+/** Loads all executions with their stages in two queries (instead of N+1). */
+export function listExecutions(opts?: {
+  project?: string;
+  status?: string;
+  limit?: number;
+}): unknown[] {
+  const db = getDb();
+
+  // Build filtered execution query
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (opts?.project !== undefined) {
+    conditions.push("project = ?");
+    params.push(opts.project);
+  }
+  if (opts?.status !== undefined) {
+    conditions.push("status = ?");
+    params.push(opts.status);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limitClause = opts?.limit !== undefined ? `LIMIT ?` : "";
+  if (opts?.limit !== undefined) params.push(opts.limit);
+
+  const execRows = db.prepare<ExecutionRow, (string | number)[]>(
+    `SELECT * FROM pipeline_executions ${where} ORDER BY started_at DESC ${limitClause}`,
+  ).all(...params);
+
+  if (execRows.length === 0) return [];
+
+  // Batch load all stages for these executions
+  const execIds = execRows.map((e) => e.id);
+  const placeholders = execIds.map(() => "?").join(",");
+  const stageRows = db.prepare<StageRow & { execution_id: string }, string[]>(
+    `SELECT execution_id, name, status, started_at, completed_at, duration_ms, retry_count, error, metrics
+     FROM pipeline_stages WHERE execution_id IN (${placeholders}) ORDER BY id`,
+  ).all(...execIds);
+
+  // Group stages by execution ID
+  const stagesByExec = new Map<string, StageRow[]>();
+  for (const s of stageRows) {
+    const list = stagesByExec.get(s.execution_id) ?? [];
+    list.push(s);
+    stagesByExec.set(s.execution_id, list);
+  }
+
+  return execRows.map((exec) => {
+    const stages = stagesByExec.get(exec.id) ?? [];
+    return {
+      id: exec.id,
+      pipelineName: exec.pipeline_name,
+      status: exec.status,
+      jobFilename: exec.job_filename,
+      project: exec.project,
+      startedAt: exec.started_at,
+      completedAt: exec.completed_at ?? undefined,
+      stages: stages.map((s) => ({
+        name: s.name,
+        status: s.status,
+        startedAt: s.started_at ?? undefined,
+        completedAt: s.completed_at ?? undefined,
+        durationMs: s.duration_ms ?? undefined,
+        retryCount: s.retry_count,
+        error: s.error ?? undefined,
+        metrics: MetricsSchema.parse(JSON.parse(s.metrics)),
+      })),
+      totalDurationMs: exec.total_duration_ms ?? undefined,
+      totalInputTokens: exec.total_input_tokens ?? undefined,
+      totalOutputTokens: exec.total_output_tokens ?? undefined,
+      totalCostUsd: exec.total_cost_usd ?? undefined,
+      entriesCreated: exec.entries_created ?? undefined,
+    };
+  });
 }
 
 // ── Cleanup ──────────────────────────────────────────────────────────

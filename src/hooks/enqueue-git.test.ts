@@ -35,7 +35,7 @@ test("GitPushJob can be written and read back with headSha", () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  writeJob("", job, "push-test.json");
+  writeJob(job, "push-test.json");
   const read = readJob("push-test.json");
   expect(read.type).toBe("git-push");
   if (read.type !== "git-push") throw new Error("unexpected type");
@@ -57,7 +57,7 @@ test("GitPullJob merge can be written and read back with headSha", () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  writeJob("", job, "pull-merge-test.json");
+  writeJob(job, "pull-merge-test.json");
   const read = readJob("pull-merge-test.json");
   expect(read.type).toBe("git-pull");
   if (read.type !== "git-pull") throw new Error("unexpected type");
@@ -80,7 +80,7 @@ test("GitPullJob rebase includes rewritten SHAs", () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  writeJob("", job, "pull-rebase-test.json");
+  writeJob(job, "pull-rebase-test.json");
   const read = readJob("pull-rebase-test.json");
   expect(read.type).toBe("git-pull");
   if (read.type !== "git-pull") throw new Error("unexpected type");
@@ -105,7 +105,7 @@ test("GitPushJob with multiple refs", () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  writeJob("", job, "multi-ref-push.json");
+  writeJob(job, "multi-ref-push.json");
   const read = readJob("multi-ref-push.json");
   if (read.type !== "git-push") throw new Error("unexpected type");
   expect(read.refs).toHaveLength(2);
@@ -123,7 +123,7 @@ test("GitPushJob with empty refs (no stdin)", () => {
     createdAt: "2026-03-22T00:00:00.000Z",
   };
 
-  writeJob("", job, "empty-refs.json");
+  writeJob(job, "empty-refs.json");
   const read = readJob("empty-refs.json");
   if (read.type !== "git-push") throw new Error("unexpected type");
   expect(read.refs).toHaveLength(0);

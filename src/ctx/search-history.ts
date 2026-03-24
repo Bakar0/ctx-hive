@@ -187,9 +187,3 @@ export function getSearchStats(): SearchStats {
     avgScoreOfServed: avgScore.avg ?? 0,
   };
 }
-
-// ── Legacy exports ───────────────────────────────────────────────────
-
-export function historyPath(): string {
-  return "";
-}

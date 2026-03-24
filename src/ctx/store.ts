@@ -34,7 +34,7 @@ const HIVE_ROOT = join(homedir(), ".ctx-hive");
 export const SCOPES: Scope[] = ["project", "org", "personal"];
 
 export const ScopeSchema = z.enum(["project", "org", "personal"]);
-const TagsSchema = z.array(z.string());
+export const TagsSchema = z.array(z.string());
 
 export function isScope(value: string): value is Scope {
   return (SCOPES as string[]).includes(value);
@@ -64,7 +64,7 @@ export function slugify(title: string): string {
 
 // ── Row → domain type helpers ──────────────────────────────────────────
 
-interface EntryRow {
+export interface EntryRow {
   id: string;
   title: string;
   slug: string;
@@ -144,7 +144,7 @@ export function deleteEntry(scope: Scope, slug: string): void {
 export function loadIndex(): IndexEntry[] {
   const db = getDb();
   const rows = db.prepare<EntryRow, []>(
-    "SELECT id, title, slug, scope, tags, project, body, tokens, created_at, updated_at FROM entries ORDER BY updated_at DESC",
+    "SELECT id, title, slug, scope, tags, project, '' as body, tokens, created_at, updated_at FROM entries ORDER BY updated_at DESC",
   ).all();
   return rows.map(rowToIndexEntry);
 }
@@ -251,16 +251,6 @@ tokens: ${meta.tokens}
 
 ${body}
 `;
-}
-
-// ── Legacy exports (for backward compat during migration) ──────────────
-
-export function entriesDir() {
-  return join(HIVE_ROOT, "entries");
-}
-
-export function indexPath() {
-  return join(HIVE_ROOT, "index.json");
 }
 
 export async function ensureCtxDir(): Promise<void> {

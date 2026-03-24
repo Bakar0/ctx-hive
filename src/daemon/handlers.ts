@@ -82,6 +82,34 @@ function buildJobResult(execution: PipelineExecution, extra: Partial<JobResult> 
   };
 }
 
+// ── Helper: pipeline callbacks factory ────────────────────────────────
+
+function buildPipelineCallbacks(pipelineName: string) {
+  return {
+    onPipelineStart: (exec: PipelineExecution) => broadcastPipelineEvent("pipeline:started", {
+      executionId: exec.id,
+      pipelineName,
+    }),
+    onStageChange: (stage: PipelineExecution["stages"][number]) => broadcastPipelineEvent("pipeline:stage-changed", {
+      executionId: "",
+      pipelineName,
+      stage,
+    }),
+  };
+}
+
+// ── Helper: persist entries count from summarize stage ────────────────
+
+function persistEntriesCount(execution: PipelineExecution): void {
+  try {
+    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
+    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
+    writeManifest(execution.id, execution);
+  } catch {
+    // summarize stage may have been skipped
+  }
+}
+
 // ── Session-mine handler ──────────────────────────────────────────────
 
 async function handleSessionMine(job: Job): Promise<JobResult> {
@@ -94,25 +122,10 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
   }, {
     jobFilename: "",
     project: projectFromPath(job.cwd),
-    onPipelineStart: (exec) => broadcastPipelineEvent("pipeline:started", {
-      executionId: exec.id,
-      pipelineName: "session-mine",
-    }),
-    onStageChange: (stage) => broadcastPipelineEvent("pipeline:stage-changed", {
-      executionId: "",
-      pipelineName: "session-mine",
-      stage,
-    }),
+    ...buildPipelineCallbacks("session-mine"),
   });
 
-  // Read final summarize stage output for entries count and persist to manifest
-  try {
-    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
-    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
-    writeManifest(execution.id, execution);
-  } catch {
-    // summarize stage may have been skipped
-  }
+  persistEntriesCount(execution);
 
   return buildJobResult(execution, {
     transcriptTokens: await extractTranscriptTokens(job.transcriptPath),
@@ -137,25 +150,10 @@ async function handleGitChange(job: Job): Promise<JobResult> {
   }, {
     jobFilename: "",
     project: projectFromPath(job.repoPath),
-    onPipelineStart: (exec) => broadcastPipelineEvent("pipeline:started", {
-      executionId: exec.id,
-      pipelineName: job.type,
-    }),
-    onStageChange: (stage) => broadcastPipelineEvent("pipeline:stage-changed", {
-      executionId: "",
-      pipelineName: job.type,
-      stage,
-    }),
+    ...buildPipelineCallbacks(job.type),
   });
 
-  // Read summarize stage output for entries count and persist to manifest
-  try {
-    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
-    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
-    writeManifest(execution.id, execution);
-  } catch {
-    // summarize stage may have been skipped
-  }
+  persistEntriesCount(execution);
 
   return buildJobResult(execution);
 }
@@ -170,25 +168,10 @@ async function handleRepoSync(job: Job): Promise<JobResult> {
   }, {
     jobFilename: "",
     project: projectFromPath(job.repoPath),
-    onPipelineStart: (exec) => broadcastPipelineEvent("pipeline:started", {
-      executionId: exec.id,
-      pipelineName: "repo-sync",
-    }),
-    onStageChange: (stage) => broadcastPipelineEvent("pipeline:stage-changed", {
-      executionId: "",
-      pipelineName: "repo-sync",
-      stage,
-    }),
+    ...buildPipelineCallbacks("repo-sync"),
   });
 
-  // Read summarize stage output for entries count and persist to manifest
-  try {
-    const summarizeOutput = StageOutputSchema.parse(readMessage(execution.id, "summarize"));
-    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
-    writeManifest(execution.id, execution);
-  } catch {
-    // summarize stage may have been skipped
-  }
+  persistEntriesCount(execution);
 
   return buildJobResult(execution);
 }

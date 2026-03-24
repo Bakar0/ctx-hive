@@ -7,14 +7,16 @@ import {
   loadIndex,
   rebuildIndex,
   resolveEntry,
+  parseFrontmatter,
+  serializeEntry,
   type EntryMeta,
   SCOPES,
   isScope,
-  hiveRoot,
 } from "./store.ts";
 import { search, formatHuman, formatJson, formatMarkdown } from "./search.ts";
 import { ctxInit } from "./init.ts";
 import { recordEvaluation, type RelevanceEval } from "./signals.ts";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getFlag, hasFlag } from "../cli/args.ts";
 
@@ -231,25 +233,26 @@ async function ctxEdit(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const editor = process.env.EDITOR ?? "vi";
-  const filePath = join(hiveRoot(), "entries", resolved.scope, `${resolved.slug}.md`);
+  const entry = readEntry(resolved.scope, resolved.slug);
+  const serialized = serializeEntry(entry, entry.body);
 
-  const proc = Bun.spawn([editor, filePath], {
+  // Write to temp file, open in editor, parse result back into DB
+  const tmpPath = join(tmpdir(), `ctx-hive-edit-${resolved.slug}.md`);
+  await Bun.write(tmpPath, serialized);
+
+  const editor = process.env.EDITOR ?? "vi";
+  const proc = Bun.spawn([editor, tmpPath], {
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
   });
   await proc.exited;
 
-  // Update the "updated" timestamp in frontmatter
-  const raw = await Bun.file(filePath).text();
-  const updated = raw.replace(
-    /^(updated: ").*(")/m,
-    `$1${new Date().toISOString()}$2`
-  );
-  await Bun.write(filePath, updated);
+  const raw = await Bun.file(tmpPath).text();
+  const parsed = parseFrontmatter(raw);
+  parsed.meta.updated = new Date().toISOString();
+  writeEntry(parsed.meta, parsed.body);
 
-  rebuildIndex();
   console.log(`Updated: ${resolved.scope}/${resolved.slug}`);
 }
 

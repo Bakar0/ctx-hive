@@ -16,6 +16,7 @@ import {
 } from "../ctx/store.ts";
 import {
   enqueueRepoSync,
+  JOB_STATUSES,
   type JobStatus,
 } from "./jobs.ts";
 import {
@@ -30,9 +31,10 @@ import {
   discoverRepos,
   enrichTrackedRepos,
 } from "../repo/scanner.ts";
-import { broadcastRepoEvent } from "./ws.ts";
+import { broadcastRepoEvent, markMetricsDirty } from "./ws.ts";
+import { triggerDrain } from "./serve.ts";
 import { errorMessage } from "../git/run.ts";
-import { listExecutionIds, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
+import { listExecutions, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
 import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -122,36 +124,38 @@ interface JobDbRow {
   output_tokens: number | null; pipeline_data: string | null;
 }
 
-const JobStatusSchema = z.enum(["pending", "processing", "done", "failed"]);
+const JobStatusSchema = z.enum(JOB_STATUSES);
 const PayloadSchema = z.record(z.string(), z.string().optional());
 const PipelineDataSchema = z.unknown();
+
+function jobDbRowToView(r: JobDbRow): JobView {
+  const payload = PayloadSchema.parse(JSON.parse(r.payload));
+  return {
+    filename: r.filename,
+    status: JobStatusSchema.parse(r.status),
+    type: r.type,
+    createdAt: r.created_at,
+    sessionId: payload.sessionId,
+    cwd: payload.cwd,
+    project: projectFromCwd(payload.cwd ?? payload.repoPath),
+    reason: payload.reason,
+    error: r.error ?? undefined,
+    failedAt: r.failed_at ?? undefined,
+    startedAt: r.started_at ?? undefined,
+    completedAt: r.completed_at ?? undefined,
+    durationMs: r.duration_ms ?? undefined,
+    transcriptTokens: r.transcript_tokens ?? undefined,
+    entriesCreated: r.entries_created ?? undefined,
+    inputTokens: r.input_tokens ?? undefined,
+    outputTokens: r.output_tokens ?? undefined,
+    pipeline: r.pipeline_data !== null ? PipelineDataSchema.parse(JSON.parse(r.pipeline_data)) : undefined,
+  };
+}
 
 export function getAllJobs(): JobView[] {
   const db = getDb();
   const rows = db.prepare<JobDbRow, []>("SELECT * FROM jobs ORDER BY created_at DESC").all();
-  return rows.map((r) => {
-    const payload = PayloadSchema.parse(JSON.parse(r.payload));
-    return {
-      filename: r.filename,
-      status: JobStatusSchema.parse(r.status),
-      type: r.type,
-      createdAt: r.created_at,
-      sessionId: payload.sessionId,
-      cwd: payload.cwd,
-      project: projectFromCwd(payload.cwd ?? payload.repoPath),
-      reason: payload.reason,
-      error: r.error ?? undefined,
-      failedAt: r.failed_at ?? undefined,
-      startedAt: r.started_at ?? undefined,
-      completedAt: r.completed_at ?? undefined,
-      durationMs: r.duration_ms ?? undefined,
-      transcriptTokens: r.transcript_tokens ?? undefined,
-      entriesCreated: r.entries_created ?? undefined,
-      inputTokens: r.input_tokens ?? undefined,
-      outputTokens: r.output_tokens ?? undefined,
-      pipeline: r.pipeline_data !== null ? PipelineDataSchema.parse(JSON.parse(r.pipeline_data)) : undefined,
-    };
-  });
+  return rows.map(jobDbRowToView);
 }
 
 export function getContexts(params: {
@@ -178,28 +182,49 @@ export function getContexts(params: {
 }
 
 export async function getMetrics(): Promise<MetricsSnapshot> {
-  const allJobs = getAllJobs();
-  const index = loadIndex();
+  const db = getDb();
 
-  const counts = { pending: 0, processing: 0, done: 0, failed: 0 };
-  for (const j of allJobs) {
-    counts[j.status]++;
-  }
+  // Job counts by status
+  const jobCounts = db.prepare<{ status: string; cnt: number }, []>(
+    "SELECT status, COUNT(*) as cnt FROM jobs GROUP BY status",
+  ).all();
+  const statusMap = new Map(jobCounts.map((r) => [r.status, r.cnt]));
+  const jobsPending = statusMap.get("pending") ?? 0;
+  const jobsProcessing = statusMap.get("processing") ?? 0;
+  const jobsDone = statusMap.get("done") ?? 0;
+  const jobsFailed = statusMap.get("failed") ?? 0;
+  const total = jobsPending + jobsProcessing + jobsDone + jobsFailed;
 
+  // Entry counts by scope and project
+  const scopeCounts = db.prepare<{ scope: string; cnt: number }, []>(
+    "SELECT scope, COUNT(*) as cnt FROM entries GROUP BY scope",
+  ).all();
   const byScope: Record<string, number> = {};
-  const byProject: Record<string, number> = {};
-  for (const e of index) {
-    byScope[e.scope] = (byScope[e.scope] ?? 0) + 1;
-    if (e.project) {
-      byProject[e.project] = (byProject[e.project] ?? 0) + 1;
-    }
+  let contextTotal = 0;
+  for (const row of scopeCounts) {
+    byScope[row.scope] = row.cnt;
+    contextTotal += row.cnt;
   }
+
+  const projectCounts = db.prepare<{ project: string; cnt: number }, []>(
+    "SELECT project, COUNT(*) as cnt FROM entries WHERE project != '' GROUP BY project",
+  ).all();
+  const byProject: Record<string, number> = {};
+  for (const row of projectCounts) {
+    byProject[row.project] = row.cnt;
+  }
+
+  // Recent jobs (only fetch 20)
+  const recentRows = db.prepare<JobDbRow, []>(
+    "SELECT * FROM jobs ORDER BY created_at DESC LIMIT 20",
+  ).all();
+  const recentJobs = recentRows.map(jobDbRowToView);
 
   return {
     timestamp: new Date().toISOString(),
-    jobs: { ...counts, total: allJobs.length },
-    contexts: { total: index.length, byScope, byProject },
-    recentJobs: allJobs.slice(0, 20),
+    jobs: { pending: jobsPending, processing: jobsProcessing, done: jobsDone, failed: jobsFailed, total },
+    contexts: { total: contextTotal, byScope, byProject },
+    recentJobs,
   };
 }
 
@@ -366,6 +391,13 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     return json({ ok: true });
   }
 
+  // POST /api/jobs/nudge — trigger immediate drain of pending jobs
+  if (path === "/api/jobs/nudge" && req.method === "POST") {
+    markMetricsDirty();
+    triggerDrain();
+    return json({ ok: true });
+  }
+
   // GET /api/contexts?scope=...&project=...&sortBy=time|project
   if (path === "/api/contexts" && req.method === "GET") {
     const scope = url.searchParams.get("scope") ?? undefined;
@@ -468,6 +500,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       const tracked = await trackRepo(result.data.absPath);
       broadcastRepoEvent("repo:tracked", tracked);
       enqueueRepoSync(result.data.absPath);
+      triggerDrain();
       return json(tracked);
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
@@ -495,6 +528,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       if (!result.success) return json({ error: "absPath required" }, 400);
       updateLastScanned(result.data.absPath);
       enqueueRepoSync(result.data.absPath);
+      triggerDrain();
       return json({ ok: true, message: "Sync job enqueued" });
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
@@ -537,24 +571,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const statusFilter = url.searchParams.get("status") ?? undefined;
     const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
 
-    const executionIds = listExecutionIds();
-    const executions: PipelineExecution[] = [];
-
-    for (const id of executionIds) {
-      try {
-        const manifest = readManifest(id);
-        const execution = normalizeExecution(PipelineExecutionSchema.parse(manifest));
-        if (projectFilter !== undefined && execution.project !== projectFilter) continue;
-        if (statusFilter !== undefined && execution.status !== statusFilter) continue;
-        executions.push(execution);
-      } catch {
-        // skip malformed manifests
-      }
-    }
-
-    // Sort by startedAt descending
-    executions.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    return json(executions.slice(0, limit));
+    const manifests = listExecutions({ project: projectFilter, status: statusFilter, limit });
+    const executions = manifests.map((m) => normalizeExecution(PipelineExecutionSchema.parse(m)));
+    return json(executions);
   }
 
   // GET /api/pipelines/:executionId
@@ -584,32 +603,25 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
   // GET /api/pipeline-stats
   if (path === "/api/pipeline-stats" && req.method === "GET") {
-    const executionIds = listExecutionIds();
+    const manifests = listExecutions();
     const stageDurations: Record<string, number[]> = {};
     const stageFailures: Record<string, { total: number; failed: number }> = {};
     let completed = 0;
     let failed = 0;
-    let total = 0;
 
-    for (const id of executionIds) {
-      try {
-        const manifest = readManifest(id);
-        const execution = PipelineExecutionSchema.parse(manifest);
-        total++;
-        if (execution.status === "completed") completed++;
-        if (execution.status === "failed") failed++;
+    for (const manifest of manifests) {
+      const execution = PipelineExecutionSchema.parse(manifest);
+      if (execution.status === "completed") completed++;
+      if (execution.status === "failed") failed++;
 
-        for (const stage of execution.stages) {
-          const name = canonicalStageName(stage.name);
-          if (stage.durationMs !== undefined) {
-            (stageDurations[name] ??= []).push(stage.durationMs);
-          }
-          const s = (stageFailures[name] ??= { total: 0, failed: 0 });
-          s.total++;
-          if (stage.status === "failed") s.failed++;
+      for (const stage of execution.stages) {
+        const name = canonicalStageName(stage.name);
+        if (stage.durationMs !== undefined) {
+          (stageDurations[name] ??= []).push(stage.durationMs);
         }
-      } catch {
-        // skip
+        const s = (stageFailures[name] ??= { total: 0, failed: 0 });
+        s.total++;
+        if (stage.status === "failed") s.failed++;
       }
     }
 
@@ -623,6 +635,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       stageFailureRates[name] = counts.total > 0 ? counts.failed / counts.total : 0;
     }
 
+    const total = manifests.length;
     return json({
       total,
       completed,

@@ -6,8 +6,7 @@ import { ensureSchema } from "./migrate.ts";
 
 // ── Paths ─────────────────────────────────────────────────────────────
 
-const HIVE_ROOT = join(homedir(), ".ctx-hive");
-const DB_PATH = join(HIVE_ROOT, "ctx-hive.db");
+const DB_PATH = join(homedir(), ".ctx-hive", "ctx-hive.db");
 
 // ── Singleton ─────────────────────────────────────────────────────────
 
@@ -19,7 +18,7 @@ let _db: Database | null = null;
  */
 export function getDb(): Database {
   if (_db !== null) return _db;
-  mkdirSync(HIVE_ROOT, { recursive: true });
+  mkdirSync(join(homedir(), ".ctx-hive"), { recursive: true });
   _db = openDb(DB_PATH);
   return _db;
 }

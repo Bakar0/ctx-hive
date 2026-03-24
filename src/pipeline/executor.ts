@@ -8,7 +8,6 @@ import {
   PipelineExecutionSchema,
 } from "./schema.ts";
 import {
-  createExecutionDir,
   writeMessage,
   writeManifest,
   readManifest,
@@ -129,7 +128,6 @@ export async function executePipeline(
   options: ExecutorOptions,
 ): Promise<PipelineExecution> {
   const executionId = crypto.randomUUID();
-  createExecutionDir(executionId);
 
   // Initialize execution record
   const allStageNames: string[] = [];

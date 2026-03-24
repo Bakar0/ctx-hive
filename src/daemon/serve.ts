@@ -23,7 +23,9 @@ import dashboardHtmlContent from "../../dashboard/dist/index.html" with { type: 
 // ── Constants ─────────────────────────────────────────────────────────
 
 const PID_FILE = join(hiveRoot(), "daemon.pid");
+const PORT_FILE = join(hiveRoot(), "daemon.port");
 const POLL_INTERVAL_MS = 30_000;
+const DEBOUNCE_MS = 100;
 const DASHBOARD_PORT = 3939;
 
 // ── Logging ───────────────────────────────────────────────────────────
@@ -50,7 +52,8 @@ async function acquirePidLock(): Promise<boolean> {
         process.kill(pid, 0); // check if process is alive
         return false; // another daemon is running
       } catch {
-        // stale PID file, process is dead
+        // stale PID file, process is dead — clean up stale port file too
+        await unlink(PORT_FILE).catch(() => {});
       }
     }
     await writeFile(PID_FILE, String(process.pid));
@@ -172,6 +175,19 @@ async function drainPending(): Promise<void> {
   }
 }
 
+// ── Nudge-triggered drain ─────────────────────────────────────────────
+
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Debounced drain trigger — called by the nudge API endpoint. */
+export function triggerDrain(): void {
+  if (drainTimer !== null) return; // already scheduled
+  drainTimer = setTimeout(() => {
+    drainTimer = null;
+    void drainPending();
+  }, DEBOUNCE_MS);
+}
+
 // ── Orphan recovery ───────────────────────────────────────────────────
 
 function recoverOrphans(): void {
@@ -250,6 +266,11 @@ async function shutdown(): Promise<void> {
     pollTimer = null;
   }
 
+  if (drainTimer) {
+    clearTimeout(drainTimer);
+    drainTimer = null;
+  }
+
   // Wait for all in-flight jobs to complete
   if (inFlightJobs.size > 0) {
     log("info", `waiting for ${inFlightJobs.size} in-flight job(s) to finish...`);
@@ -258,6 +279,7 @@ async function shutdown(): Promise<void> {
 
   closeDb();
   await releasePidLock();
+  await unlink(PORT_FILE).catch(() => {});
   log("info", "daemon stopped");
 }
 
@@ -308,6 +330,7 @@ export async function serve(args: string[]): Promise<void> {
 
   // Start the HTTP + WebSocket server
   startHttpServer(port);
+  await writeFile(PORT_FILE, String(port));
   startMetricsBroadcast(5_000);
 
   // Recover orphaned jobs from previous crash

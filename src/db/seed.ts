@@ -6,9 +6,9 @@
 import type { Database } from "bun:sqlite";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { z } from "zod";
-import { parseFrontmatter, SCOPES } from "../ctx/store.ts";
+import { parseFrontmatter, SCOPES, hiveRoot } from "../ctx/store.ts";
+import { JOB_STATUSES } from "../daemon/jobs.ts";
 import { PipelineExecutionSchema, MessageEnvelopeSchema } from "../pipeline/schema.ts";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -23,19 +23,21 @@ export interface SeedResult {
   pipelines: number;
 }
 
-// ── Paths ─────────────────────────────────────────────────────────────
-
-const HIVE_ROOT = join(homedir(), ".ctx-hive");
-const ENTRIES_DIR = join(HIVE_ROOT, "entries");
-const JOBS_ROOT = join(HIVE_ROOT, "jobs");
-const SIGNALS_PATH = join(HIVE_ROOT, "signals.json");
-const HISTORY_PATH = join(HIVE_ROOT, "search-history.jsonl");
-const REPOS_PATH = join(HIVE_ROOT, "repos.json");
-const MESSAGES_DIR = join(HIVE_ROOT, "messages");
-
-const JOB_STATUSES = ["pending", "processing", "done", "failed"] as const;
-
 // ── Main ──────────────────────────────────────────────────────────────
+
+// ── Paths (resolved at call time from hiveRoot()) ────────────────────
+
+function seedPaths() {
+  const root = hiveRoot();
+  return {
+    entries: join(root, "entries"),
+    jobs: join(root, "jobs"),
+    signals: join(root, "signals.json"),
+    history: join(root, "search-history.jsonl"),
+    repos: join(root, "repos.json"),
+    messages: join(root, "messages"),
+  };
+}
 
 export async function seedFromFiles(db: Database): Promise<SeedResult> {
   const result: SeedResult = { skipped: false, entries: 0, jobs: 0, signals: 0, searchHistory: 0, repos: 0, pipelines: 0 };
@@ -60,17 +62,18 @@ export async function seedFromFiles(db: Database): Promise<SeedResult> {
 
 // ── Entries ───────────────────────────────────────────────────────────
 
-interface EntryRow {
+interface SeedEntryRow {
   id: string; title: string; slug: string; scope: string;
   tags: string; project: string; body: string; tokens: number;
   createdAt: string; updatedAt: string;
 }
 
 async function seedEntries(db: Database): Promise<number> {
-  const rows: EntryRow[] = [];
+  const rows: SeedEntryRow[] = [];
 
+  const paths = seedPaths();
   for (const scope of SCOPES) {
-    const scopeDir = join(ENTRIES_DIR, scope);
+    const scopeDir = join(paths.entries, scope);
     let files: string[];
     try {
       files = await readdir(scopeDir);
@@ -112,7 +115,7 @@ async function seedEntries(db: Database): Promise<number> {
 
 // ── Jobs ──────────────────────────────────────────────────────────────
 
-interface JobRow {
+interface SeedJobRow {
   filename: string; type: string; status: string; payload: string;
   error: string | null; createdAt: string; startedAt: string | null;
   completedAt: string | null; failedAt: string | null;
@@ -122,10 +125,11 @@ interface JobRow {
 }
 
 async function seedJobs(db: Database): Promise<number> {
-  const rows: JobRow[] = [];
+  const rows: SeedJobRow[] = [];
 
+  const paths = seedPaths();
   for (const status of JOB_STATUSES) {
-    const dir = join(JOBS_ROOT, status);
+    const dir = join(paths.jobs, status);
     let files: string[];
     try {
       files = await readdir(dir);
@@ -183,7 +187,7 @@ async function seedJobs(db: Database): Promise<number> {
 // ── Signals ──────────────────────────────────────────────────────────
 
 async function seedSignals(db: Database): Promise<number> {
-  const file = Bun.file(SIGNALS_PATH);
+  const file = Bun.file(seedPaths().signals);
   if (!(await file.exists())) return 0;
 
   const RawSignalsSchema = z.object({
@@ -233,7 +237,7 @@ async function seedSignals(db: Database): Promise<number> {
 // ── Search History ───────────────────────────────────────────────────
 
 async function seedSearchHistory(db: Database): Promise<number> {
-  const file = Bun.file(HISTORY_PATH);
+  const file = Bun.file(seedPaths().history);
   if (!(await file.exists())) return 0;
 
   const text = await file.text();
@@ -283,7 +287,7 @@ async function seedSearchHistory(db: Database): Promise<number> {
 // ── Tracked Repos ────────────────────────────────────────────────────
 
 async function seedRepos(db: Database): Promise<number> {
-  const file = Bun.file(REPOS_PATH);
+  const file = Bun.file(seedPaths().repos);
   if (!(await file.exists())) return 0;
 
   const RawRepoStoreSchema = z.object({
@@ -319,9 +323,10 @@ async function seedRepos(db: Database): Promise<number> {
 // ── Pipeline Executions ──────────────────────────────────────────────
 
 async function seedPipelines(db: Database): Promise<number> {
+  const messagesDir = seedPaths().messages;
   let executionIds: string[];
   try {
-    const dirEntries = await readdir(MESSAGES_DIR, { withFileTypes: true });
+    const dirEntries = await readdir(messagesDir, { withFileTypes: true });
     executionIds = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     return 0;
@@ -346,7 +351,7 @@ async function seedPipelines(db: Database): Promise<number> {
   let count = 0;
 
   for (const executionId of executionIds) {
-    const manifestFile = Bun.file(join(MESSAGES_DIR, executionId, "manifest.json"));
+    const manifestFile = Bun.file(join(messagesDir, executionId, "manifest.json"));
     if (!(await manifestFile.exists())) continue;
 
     try {
@@ -368,7 +373,7 @@ async function seedPipelines(db: Database): Promise<number> {
       count++;
 
       // Seed stage messages
-      const execDir = join(MESSAGES_DIR, executionId);
+      const execDir = join(messagesDir, executionId);
       const msgFiles = await readdir(execDir).catch(() => [] as string[]);
       const msgRows: { stageName: string; timestamp: string; data: string; metrics: string | null }[] = [];
 

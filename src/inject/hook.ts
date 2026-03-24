@@ -11,7 +11,7 @@ import { hiveRoot } from "../ctx/store.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-const DAEMON_URL = "http://localhost:3939";
+const DEFAULT_DAEMON_PORT = 3939;
 const DAEMON_TIMEOUT_MS = 1500;
 const HARD_TIMEOUT_MS = 2000;
 const MAX_RESULTS = 5;
@@ -49,6 +49,17 @@ function formatInjectResult(results: SearchResult[]): string {
   ].join("\n");
 }
 
+// ── Daemon URL discovery ──────────────────────────────────────────────
+
+async function getDaemonUrl(): Promise<string> {
+  try {
+    const content = await Bun.file(join(hiveRoot(), "daemon.port")).text();
+    const port = parseInt(content.trim(), 10);
+    if (port > 0) return `http://localhost:${String(port)}`;
+  } catch { /* port file missing */ }
+  return `http://localhost:${String(DEFAULT_DAEMON_PORT)}`;
+}
+
 // ── Daemon search (fast path) ──────────────────────────────────────────
 
 async function tryDaemonSearch(
@@ -61,10 +72,11 @@ async function tryDaemonSearch(
     if (project !== undefined && project !== "") params.set("project", project);
     if (sessionId !== undefined && sessionId !== "") params.set("sessionId", sessionId);
 
+    const daemonUrl = await getDaemonUrl();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DAEMON_TIMEOUT_MS);
 
-    const resp = await fetch(`${DAEMON_URL}/api/search?${params.toString()}`, {
+    const resp = await fetch(`${daemonUrl}/api/search?${params.toString()}`, {
       signal: controller.signal,
     });
     clearTimeout(timeout);

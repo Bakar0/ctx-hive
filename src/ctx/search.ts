@@ -1,8 +1,7 @@
-import { z } from "zod";
 import { getDb } from "../db/connection.ts";
-import type { IndexEntry } from "./store.ts";
+import type { IndexEntry, EntryRow } from "./store.ts";
 import type { Scope } from "./store.ts";
-import { ScopeSchema } from "./store.ts";
+import { ScopeSchema, TagsSchema } from "./store.ts";
 import { getSignalScores, recordSearchHits } from "./signals.ts";
 import { appendSearchRecord, type SearchSource } from "./search-history.ts";
 
@@ -45,17 +44,7 @@ export interface SearchMeta {
   sessionId?: string;
 }
 
-interface FtsRow {
-  id: string;
-  title: string;
-  slug: string;
-  scope: string;
-  tags: string;
-  project: string;
-  body: string;
-  tokens: number;
-  created_at: string;
-  updated_at: string;
+interface FtsRow extends EntryRow {
   fts_score: number;
   excerpt: string;
 }
@@ -88,7 +77,8 @@ export function search(
 
   // BM25 weights: title=5, tags=3, body=1 (matching original TAG/TITLE/CONTENT weights)
   const sql = `
-    SELECT e.id, e.title, e.slug, e.scope, e.tags, e.project, e.body, e.tokens,
+    SELECT e.id, e.title, e.slug, e.scope, e.tags, e.project,
+           SUBSTR(e.body, 1, 150) as body, e.tokens,
            e.created_at, e.updated_at,
            bm25(entries_fts, 5.0, 3.0, 1.0) as fts_score,
            snippet(entries_fts, 2, '', '', '...', 32) as excerpt
@@ -107,7 +97,7 @@ export function search(
   if (filters.tags && filters.tags.length > 0) {
     const filterTags = filters.tags.map((t) => t.toLowerCase());
     filtered = rows.filter((row) => {
-      const rowTags = z.array(z.string()).parse(JSON.parse(row.tags)).map((t) => t.toLowerCase());
+      const rowTags = TagsSchema.parse(JSON.parse(row.tags)).map((t) => t.toLowerCase());
       return filterTags.some((ft) => rowTags.includes(ft));
     });
   }
@@ -125,7 +115,7 @@ export function search(
       id: row.id,
       title: row.title,
       scope: ScopeSchema.parse(row.scope),
-      tags: z.array(z.string()).parse(JSON.parse(row.tags)),
+      tags: TagsSchema.parse(JSON.parse(row.tags)),
       project: row.project,
       created: row.created_at,
       updated: row.updated_at,
@@ -197,41 +187,4 @@ export function formatMarkdown(results: SearchResult[]): string {
       return `### ${r.title}\n**id:** ${r.id} | **scope:** ${r.scope} | **relevance:** ${r.score} | **tokens:** ${r.tokens}${tags}\n\n${r.excerpt}`;
     })
     .join("\n\n---\n\n");
-}
-
-// ── Legacy scoring (kept for backward compat) ──────────────────────────
-
-const TAG_WEIGHT = 5;
-const TITLE_WEIGHT = 3;
-const CONTENT_WEIGHT = 1;
-const CONTENT_CAP_PER_TOKEN = 5;
-
-export function scoreEntry(
-  tokens: string[],
-  entry: IndexEntry,
-  content: string,
-): number {
-  let score = 0;
-  const titleLower = entry.title.toLowerCase();
-  const tagsLower = entry.tags.map((t) => t.toLowerCase());
-  const contentLower = content.toLowerCase();
-
-  for (const token of tokens) {
-    if (tagsLower.includes(token)) {
-      score += TAG_WEIGHT;
-    }
-    if (titleLower.includes(token)) {
-      score += TITLE_WEIGHT;
-    }
-    let count = 0;
-    let idx = 0;
-    while ((idx = contentLower.indexOf(token, idx)) !== -1) {
-      count++;
-      idx += token.length;
-      if (count >= CONTENT_CAP_PER_TOKEN) break;
-    }
-    score += count * CONTENT_WEIGHT;
-  }
-
-  return score;
 }

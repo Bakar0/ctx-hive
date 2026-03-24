@@ -89,12 +89,6 @@ export const RawJobFileSchema = z.object({
   pipeline: PipelineExecutionSchema.optional(),
 }).passthrough();
 
-// ── Directory setup (no-op — DB handles storage) ─────────────────────
-
-export function ensureJobDirs(): void {
-  // No-op — DB handles storage
-}
-
 // ── Job I/O ──────────────────────────────────────────────────────────
 
 export function readJob(filenameOrPath: string): Job {
@@ -105,7 +99,7 @@ export function readJob(filenameOrPath: string): Job {
   return JobSchema.parse(JSON.parse(row.payload));
 }
 
-export function writeJob(_dir: string, job: Job, filename: string): string {
+export function writeJob(job: Job, filename: string): string {
   const db = getDb();
   db.prepare(`
     INSERT INTO jobs (filename, type, status, payload, created_at)
@@ -114,21 +108,8 @@ export function writeJob(_dir: string, job: Job, filename: string): string {
   return filename;
 }
 
-export function moveJob(filenameOrPath: string, _toDir: string): string {
-  // In the DB model, moveJob is no longer needed — status updates are handled directly.
-  // This function is kept for backward compat but is a no-op.
-  return basename(filenameOrPath);
-}
-
-export function listJobs(dirOrStatus: string): string[] {
+export function listJobs(status: JobStatus): string[] {
   const db = getDb();
-  // Determine status from the dir path
-  const status = dirOrStatus.includes("pending") ? "pending"
-    : dirOrStatus.includes("processing") ? "processing"
-    : dirOrStatus.includes("done") ? "done"
-    : dirOrStatus.includes("failed") ? "failed"
-    : dirOrStatus;
-
   const rows = db.prepare<{ filename: string }, [string]>(
     "SELECT filename FROM jobs WHERE status = ? ORDER BY created_at",
   ).all(status);
@@ -138,16 +119,16 @@ export function listJobs(dirOrStatus: string): string[] {
 export function isDuplicate(sessionId: string): boolean {
   const db = getDb();
   const row = db.prepare<{ cnt: number }, [string]>(
-    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type = 'session-mine' AND payload LIKE ?",
-  ).get(`%"sessionId":"${sessionId}"%`);
+    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type = 'session-mine' AND json_extract(payload, '$.sessionId') = ?",
+  ).get(sessionId);
   return row !== null && row.cnt > 0;
 }
 
 export function isGitJobProcessed(headSha: string, repoPath: string): boolean {
   const db = getDb();
   const row = db.prepare<{ cnt: number }, [string, string]>(
-    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type IN ('git-push', 'git-pull') AND payload LIKE ? AND payload LIKE ?",
-  ).get(`%"headSha":"${headSha}"%`, `%"repoPath":"${repoPath}"%`);
+    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type IN ('git-push', 'git-pull') AND json_extract(payload, '$.headSha') = ? AND json_extract(payload, '$.repoPath') = ?",
+  ).get(headSha, repoPath);
   return row !== null && row.cnt > 0;
 }
 
@@ -202,13 +183,5 @@ export function enqueueRepoSync(repoPath: string): void {
     cwd: repoPath,
     createdAt: new Date().toISOString(),
   };
-  writeJob("", syncJob, `${jobTimestamp()}-sync-${repoName}.json`);
+  writeJob(syncJob, `${jobTimestamp()}-sync-${repoName}.json`);
 }
-
-// ── Legacy path constants (for backward compat) ─────────────────────
-
-export const JOBS_ROOT = "";
-export const PENDING_DIR = "pending";
-export const PROCESSING_DIR = "processing";
-export const DONE_DIR = "done";
-export const FAILED_DIR = "failed";

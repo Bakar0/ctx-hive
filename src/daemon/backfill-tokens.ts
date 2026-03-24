@@ -1,6 +1,4 @@
-import { readdir } from "node:fs/promises";
-import { join } from "node:path";
-import { DONE_DIR, FAILED_DIR } from "./jobs.ts";
+import { getDb } from "../db/connection.ts";
 import { extractTranscriptTokens } from "./handlers.ts";
 
 /**
@@ -12,46 +10,35 @@ export async function backfillTranscriptTokens(): Promise<void> {
   let skipped = 0;
   let failed = 0;
 
-  for (const dir of [DONE_DIR, FAILED_DIR]) {
-    let files: string[];
+  const db = getDb();
+  const rows = db.prepare<{ filename: string; payload: string }, [string]>(
+    "SELECT filename, payload FROM jobs WHERE status IN ('done', 'failed') AND type = ?",
+  ).all("session-mine");
+
+  for (const row of rows) {
     try {
-      files = (await readdir(dir)).filter((f) => f.endsWith(".json"));
-    } catch {
-      continue;
-    }
-
-    for (const file of files) {
-      const path = join(dir, file);
-      try {
-        const raw = await Bun.file(path).text();
-        const job: unknown = JSON.parse(raw);
-        if (
-          typeof job !== "object" || job === null ||
-          !("type" in job) || job.type !== "session-mine" ||
-          !("transcriptPath" in job) || typeof job.transcriptPath !== "string"
-        ) {
-          skipped++;
-          continue;
-        }
-
-        const tokens = await extractTranscriptTokens(job.transcriptPath);
-        if (tokens === undefined) {
-          skipped++;
-          continue;
-        }
-
-        const parsed: unknown = JSON.parse(raw);
-        if (typeof parsed !== "object" || parsed === null) { skipped++; continue; }
-        const data: Record<string, unknown> = { ...parsed };
-        const old = typeof data._transcriptTokens === "number" ? data._transcriptTokens : undefined;
-        data._transcriptTokens = tokens;
-        await Bun.write(path, JSON.stringify(data, null, 2));
-        console.log(`${file}: ${old ?? "none"} → ${tokens}`);
-        updated++;
-      } catch {
-        console.error(`Failed: ${file}`);
-        failed++;
+      const job: unknown = JSON.parse(row.payload);
+      if (
+        typeof job !== "object" || job === null ||
+        !("transcriptPath" in job) || typeof job.transcriptPath !== "string"
+      ) {
+        skipped++;
+        continue;
       }
+
+      const tokens = await extractTranscriptTokens(job.transcriptPath);
+      if (tokens === undefined) {
+        skipped++;
+        continue;
+      }
+
+      db.prepare("UPDATE jobs SET transcript_tokens = ? WHERE filename = ?")
+        .run(tokens, row.filename);
+      console.log(`${row.filename}: → ${tokens}`);
+      updated++;
+    } catch {
+      console.error(`Failed: ${row.filename}`);
+      failed++;
     }
   }
 

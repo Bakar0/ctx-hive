@@ -145,8 +145,3 @@ export function updateLastScanned(absPath: string): void {
     .run(new Date().toISOString(), normalized);
 }
 
-// ── Legacy exports ───────────────────────────────────────────────────
-
-export function reposJsonPath(): string {
-  return "";
-}

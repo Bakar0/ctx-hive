@@ -90,12 +90,13 @@
           <Table.Head>Query</Table.Head>
           <Table.Head>Project</Table.Head>
           <Table.Head>Results</Table.Head>
+          <Table.Head>Tokens</Table.Head>
           <Table.Head>Duration</Table.Head>
         </Table.Row>
       </Table.Header>
       <Table.Body>
         {#if allHistory.length === 0}
-          <Table.Row><Table.Cell colspan={7} class="text-center text-muted-foreground py-8">No search history yet</Table.Cell></Table.Row>
+          <Table.Row><Table.Cell colspan={8} class="text-center text-muted-foreground py-8">No search history yet</Table.Cell></Table.Row>
         {:else}
           {#each pageItems as r, i}
             {@const idx = (page - 1) * pageSize + i}
@@ -113,12 +114,14 @@
               <Table.Cell class="font-mono text-xs max-w-[250px] truncate">{r.query}</Table.Cell>
               <Table.Cell class="font-mono text-xs text-muted-foreground">{r.project ?? "\u2014"}</Table.Cell>
               <Table.Cell class="font-mono text-xs {r.resultCount > 0 ? 'text-success' : 'text-destructive'}">{r.resultCount}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground">{r.results.reduce((s, x) => s + (x.tokens ?? 0), 0).toLocaleString()}</Table.Cell>
               <Table.Cell class="font-mono text-xs text-muted-foreground">{r.durationMs}ms</Table.Cell>
             </Table.Row>
             {#if expandedIdx === idx && r.results?.length}
               <Table.Row class="hover:bg-transparent">
-                <Table.Cell colspan={7} class="!p-0">
+                <Table.Cell colspan={8} class="!p-0">
                   <div class="p-3 pl-12 bg-background border-t border-border">
+                    <p class="font-mono text-xs mb-2 whitespace-pre-wrap break-all">{r.query}</p>
                     {#each r.results as result}
                       <!-- svelte-ignore a11y_click_events_have_key_events -->
                       <!-- svelte-ignore a11y_no_static_element_interactions -->

@@ -4,6 +4,55 @@
 export type JobStatus = "pending" | "processing" | "done" | "failed";
 export type Scope = "project" | "org" | "personal";
 export type SearchSource = "inject" | "cli" | "api";
+export type StageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
+export type PipelineStatus = "pending" | "running" | "completed" | "failed";
+
+// ── Pipeline types ───────────────────────────────────────────────────
+
+export interface StageMetrics {
+  itemsProcessed?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+}
+
+export interface StageExecution {
+  name: string;
+  status: StageStatus;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  retryCount: number;
+  error?: string;
+  metrics: StageMetrics;
+}
+
+export interface PipelineExecution {
+  id: string;
+  pipelineName: string;
+  status: PipelineStatus;
+  jobFilename: string;
+  project: string;
+  startedAt: string;
+  completedAt?: string;
+  stages: StageExecution[];
+  totalDurationMs?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCostUsd?: number;
+  entriesCreated?: number;
+}
+
+export interface PipelineStats {
+  total: number;
+  completed: number;
+  failed: number;
+  successRate: number;
+  avgStageDurations: Record<string, number>;
+  stageFailureRates: Record<string, number>;
+}
+
+// ── Job types ────────────────────────────────────────────────────────
 
 export interface JobView {
   filename: string;
@@ -18,11 +67,12 @@ export interface JobView {
   failedAt?: string;
   startedAt?: string;
   completedAt?: string;
-  duration_ms?: number;
+  durationMs?: number;
   transcriptTokens?: number;
   entriesCreated?: number;
   inputTokens?: number;
   outputTokens?: number;
+  pipeline?: PipelineExecution;
 }
 
 export interface MetricsSnapshot {
@@ -41,6 +91,8 @@ export interface MetricsSnapshot {
   };
   recentJobs: JobView[];
 }
+
+// ── Context types ────────────────────────────────────────────────────
 
 export interface IndexEntry {
   id: string;
@@ -83,6 +135,8 @@ export interface SignalsStore {
   version: 1;
 }
 
+// ── Repo types ───────────────────────────────────────────────────────
+
 export interface DiscoveredRepo {
   name: string;
   absPath: string;
@@ -102,6 +156,8 @@ export interface DiscoveredRepo {
   exists: boolean;
 }
 
+// ── Search types ─────────────────────────────────────────────────────
+
 export interface SearchRecord {
   timestamp: string;
   source: SearchSource;
@@ -110,7 +166,7 @@ export interface SearchRecord {
   cwd?: string;
   sessionId?: string;
   resultCount: number;
-  results: { id: string; title: string; score: number }[];
+  results: { id: string; title: string; score: number; tokens?: number }[];
   durationMs: number;
 }
 
@@ -122,6 +178,8 @@ export interface SearchStats {
   topServedEntries: { id: string; title: string; count: number }[];
   avgScoreOfServed: number;
 }
+
+// ── Session types ────────────────────────────────────────────────────
 
 export interface SessionServedEntry {
   id: string;
@@ -160,4 +218,8 @@ export type WsEvent =
   | "context:deleted"
   | "repo:tracked"
   | "repo:untracked"
-  | "repo:scan-complete";
+  | "repo:scan-complete"
+  | "pipeline:started"
+  | "pipeline:stage-changed"
+  | "pipeline:completed"
+  | "pipeline:failed";

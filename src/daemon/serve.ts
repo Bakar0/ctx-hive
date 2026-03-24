@@ -1,6 +1,6 @@
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile, unlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { hiveRoot } from "../ctx/store.ts";
 import { errorMessage } from "../git/run.ts";
 import {
@@ -20,8 +20,9 @@ import {
 import { getHandler } from "./handlers.ts";
 import { handleApiRequest } from "./api.ts";
 import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
-import { loadTrackedRepos } from "../repo/tracking.ts";
+import { loadTrackedRepos, findTrackedRepoFor } from "../repo/tracking.ts";
 import { recomputeAllScores } from "../ctx/signals.ts";
+import { ensureMessageDirs } from "../pipeline/messages.ts";
 import dashboardHtmlContent from "../../dashboard/dist/index.html" with { type: "text" };
 
 // ── Constants ─────────────────────────────────────────────────────────
@@ -101,8 +102,7 @@ async function processJob(jobPath: string): Promise<void> {
     const repoPath = "repoPath" in job ? job.repoPath : ("cwd" in job ? job.cwd : undefined);
     if (repoPath != null && repoPath !== "") {
       const trackedRepos = await loadTrackedRepos();
-      const normalized = resolve(repoPath);
-      if (!trackedRepos.some((r) => r.absPath === normalized)) {
+      if (!findTrackedRepoFor(repoPath, trackedRepos)) {
         log("info", `skipping job for untracked repo: ${repoPath}`);
         await moveJob(jobPath, DONE_DIR);
         return;
@@ -136,7 +136,7 @@ async function processJob(jobPath: string): Promise<void> {
     const result = await handler(job);
     if (result.success) {
       await completeJob(processingPath, result);
-      log("info", `completed: ${job.type} (${(result.duration_ms / 1000).toFixed(1)}s)`);
+      log("info", `completed: ${job.type} (${(result.durationMs / 1000).toFixed(1)}s)`);
       broadcastJobEvent("job:completed", job);
     } else {
       await failJob(processingPath, result.error ?? "unknown error");
@@ -198,6 +198,8 @@ async function recoverOrphans(): Promise<void> {
 
 // oxlint-disable-next-line no-unsafe-type-assertion -- Bun text import is always a string at runtime
 const DASHBOARD_HTML = dashboardHtmlContent as unknown as string;
+const DASHBOARD_ETAG = `"${Bun.hash(DASHBOARD_HTML).toString(36)}"`;
+
 
 // ── HTTP + WebSocket Server ───────────────────────────────────────────
 
@@ -223,8 +225,15 @@ function startHttpServer(port: number): void {
       if (apiResponse) return apiResponse;
 
       // Dashboard (serve HTML for everything else)
+      if (req.headers.get("If-None-Match") === DASHBOARD_ETAG) {
+        return new Response(null, { status: 304 });
+      }
       return new Response(DASHBOARD_HTML, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-cache",
+          "ETag": DASHBOARD_ETAG,
+        },
       });
     },
     websocket: wsHandlers,
@@ -288,6 +297,7 @@ export async function serve(args: string[]): Promise<void> {
   }
 
   await ensureJobDirs();
+  await ensureMessageDirs();
 
   const acquired = await acquirePidLock();
   if (!acquired) {

@@ -1,24 +1,19 @@
-import { join } from "node:path";
-import { resolveRepoMeta, buildSessionPrompt, buildEvaluationPrompt, buildGitChangePrompt, buildRepoPrompt, gatherRepoContext, type GitChangeDetails, type ServedEntry } from "../ctx/init.ts";
-import { loadIndex, hiveRoot, type IndexEntry } from "../ctx/store.ts";
-import { extractServedEntries } from "../ctx/sessions.ts";
-import { getSessionEntries } from "../ctx/search-history.ts";
-import { runSingle, runParallel, type PipelineTask } from "../adapter/pipeline.ts";
-import { runGit } from "../git/run.ts";
+import { basename } from "node:path";
+import { z } from "zod";
+import { executePipeline } from "../pipeline/executor.ts";
+import { readMessage, writeManifest } from "../pipeline/messages.ts";
+import { sessionMinePipeline, gitPushPipeline, gitPullPipeline, repoSyncPipeline } from "../pipeline/definitions.ts";
+import { broadcastPipelineEvent } from "./ws.ts";
 import type { Job, JobResult } from "./jobs.ts";
+import type { PipelineExecution } from "../pipeline/schema.ts";
 
-// ── Constants ────────────────────────────────────────────────────────
+const StageOutputSchema = z.object({
+  entriesCreated: z.number().optional(),
+  transcriptTokens: z.number().optional(),
+}).passthrough();
 
-const AGENT_MODEL = "sonnet";
-const AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
-const LOGS_DIR = join(hiveRoot(), "logs");
+// ── Transcript parsing (kept for backfill-tokens.ts) ─────────────────
 
-// ── Transcript parsing ──────────────────────────────────────────────
-
-/**
- * Extract the context window size from a Claude Code session transcript.
- * Reads the last assistant message's usage and sums input + cached tokens.
- */
 export async function extractTranscriptTokens(transcriptPath: string): Promise<number | undefined> {
   try {
     const text = await Bun.file(transcriptPath).text();
@@ -63,53 +58,26 @@ export function getHandler(type: string): JobHandler | undefined {
   return handlers.get(type);
 }
 
-// ── Shared agent runner ──────────────────────────────────────────────
+// ── Helper: project name from cwd ────────────────────────────────────
 
-async function runAgentAndCollect(
-  name: string,
-  prompt: string,
-  cwd: string,
-  index: IndexEntry[],
-  extra?: { transcriptTokens?: number },
-): Promise<JobResult> {
-  const start = Date.now();
-  const countBefore = index.length;
+function projectFromPath(path?: string): string {
+  if (path === undefined || path === "") return "unknown";
+  return basename(path);
+}
 
-  const result = await runSingle({
-    name,
-    options: {
-      name,
-      prompt,
-      cwd,
-      model: AGENT_MODEL,
-      allowedTools: AGENT_TOOLS,
-      logsDir: LOGS_DIR,
-    },
-  });
+// ── Helper: build job result from pipeline execution ─────────────────
 
-  const countAfter = (await loadIndex()).length;
-  const entriesCreated = Math.max(0, countAfter - countBefore);
-  const taskResult = result.results[0];
-  const duration_ms = Date.now() - start;
-
-  if (taskResult?.error != null && taskResult.error !== "") {
-    return {
-      success: false,
-      error: taskResult.error,
-      duration_ms,
-      entriesCreated,
-      inputTokens: taskResult.inputTokens,
-      outputTokens: taskResult.outputTokens,
-      ...extra,
-    };
-  }
-
+function buildJobResult(execution: PipelineExecution, extra: Partial<JobResult> = {}): JobResult {
   return {
-    success: true,
-    duration_ms,
-    entriesCreated,
-    inputTokens: taskResult?.inputTokens,
-    outputTokens: taskResult?.outputTokens,
+    success: execution.status === "completed",
+    error: execution.status === "failed"
+      ? execution.stages.find((s) => s.status === "failed")?.error
+      : undefined,
+    durationMs: execution.totalDurationMs ?? 0,
+    entriesCreated: execution.entriesCreated ?? 0,
+    inputTokens: execution.totalInputTokens,
+    outputTokens: execution.totalOutputTokens,
+    pipeline: execution,
     ...extra,
   };
 }
@@ -118,202 +86,111 @@ async function runAgentAndCollect(
 
 async function handleSessionMine(job: Job): Promise<JobResult> {
   if (job.type !== "session-mine") throw new Error("Expected session-mine job");
-  const { cwd, transcriptPath } = job;
 
-  // Extract context window size from the last assistant message's usage
-  const transcriptTokens = await extractTranscriptTokens(transcriptPath);
-
-  const meta = await resolveRepoMeta(cwd);
-  const index = await loadIndex();
-  const existing = index.filter(
-    (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-  );
-  const isUpdate = existing.length > 0;
-
-  // Find entries that were served in this session — try search-history first, fallback to transcript regex
-  const historyEntries = await getSessionEntries(job.sessionId);
-  let servedEntries: ServedEntry[];
-
-  if (historyEntries.length > 0) {
-    servedEntries = historyEntries
-      .map((e) => {
-        const entry = index.find((ie) => ie.id === e.id);
-        return entry !== undefined ? { id: e.id, title: entry.title } : null;
-      })
-      .filter((e): e is ServedEntry => e !== null);
-  } else {
-    // Fallback: regex scan transcript (backward compat for sessions before this change)
-    const servedIds = await extractServedEntries(transcriptPath);
-    servedEntries = servedIds
-      .map((id) => {
-        const entry = index.find((e) => e.id === id);
-        return entry !== undefined ? { id, title: entry.title } : null;
-      })
-      .filter((e): e is ServedEntry => e !== null);
-  }
-
-  const start = Date.now();
-  const countBefore = index.length;
-
-  // Build tasks: always mine, evaluate only if there are served entries
-  const tasks: PipelineTask<unknown>[] = [];
-
-  tasks.push({
-    name: `daemon-session-mine-${meta.name}`,
-    options: {
-      name: `daemon-session-mine-${meta.name}`,
-      prompt: buildSessionPrompt(meta, [transcriptPath], existing, isUpdate, servedEntries),
-      cwd,
-      model: AGENT_MODEL,
-      allowedTools: AGENT_TOOLS,
-      logsDir: LOGS_DIR,
-    },
+  const execution = await executePipeline(sessionMinePipeline, {
+    cwd: job.cwd,
+    transcriptPath: job.transcriptPath,
+    sessionId: job.sessionId,
+  }, {
+    jobFilename: "",
+    project: projectFromPath(job.cwd),
+    onPipelineStart: (exec) => broadcastPipelineEvent("pipeline:started", {
+      executionId: exec.id,
+      pipelineName: "session-mine",
+    }),
+    onStageChange: (stage) => broadcastPipelineEvent("pipeline:stage-changed", {
+      executionId: "",
+      pipelineName: "session-mine",
+      stage,
+    }),
   });
 
-  if (servedEntries.length > 0) {
-    tasks.push({
-      name: `daemon-session-eval-${meta.name}`,
-      options: {
-        name: `daemon-session-eval-${meta.name}`,
-        prompt: buildEvaluationPrompt(meta, [transcriptPath], servedEntries),
-        cwd,
-        model: AGENT_MODEL,
-        allowedTools: ["Bash", "Read"],
-        logsDir: LOGS_DIR,
-      },
-    });
+  // Read final summarize stage output for entries count and persist to manifest
+  try {
+    const summarizeOutput = StageOutputSchema.parse(await readMessage(execution.id, "summarize"));
+    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
+    await writeManifest(execution.id, execution);
+  } catch {
+    // summarize stage may have been skipped
   }
 
-  const phase = await runParallel(tasks);
-
-  const countAfter = (await loadIndex()).length;
-  const entriesCreated = Math.max(0, countAfter - countBefore);
-  const duration_ms = Date.now() - start;
-
-  // Sum token usage across all agents
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let hasError = false;
-  let errorMsg: string | undefined;
-
-  for (const r of phase.results) {
-    inputTokens += r.inputTokens ?? 0;
-    outputTokens += r.outputTokens ?? 0;
-    if (r.error != null && r.error !== "") {
-      hasError = true;
-      errorMsg = r.error;
-    }
-  }
-
-  if (hasError) {
-    return {
-      success: false,
-      error: errorMsg,
-      duration_ms,
-      entriesCreated,
-      inputTokens,
-      outputTokens,
-      transcriptTokens,
-    };
-  }
-
-  return {
-    success: true,
-    duration_ms,
-    entriesCreated,
-    inputTokens,
-    outputTokens,
-    transcriptTokens,
-  };
+  return buildJobResult(execution, {
+    transcriptTokens: await extractTranscriptTokens(job.transcriptPath),
+  });
 }
 
 // ── Git change handler ───────────────────────────────────────────────
 
 async function handleGitChange(job: Job): Promise<JobResult> {
   if (job.type !== "git-push" && job.type !== "git-pull") throw new Error("Expected git job");
-  const repoPath = job.repoPath;
 
-  const meta = await resolveRepoMeta(repoPath);
-  const index = await loadIndex();
-  const existing = index.filter(
-    (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-  );
-  const isUpdate = existing.length > 0;
+  const pipeline = job.type === "git-push" ? gitPushPipeline : gitPullPipeline;
+  const trigger = job.type === "git-push" ? "push" as const
+    : ("trigger" in job && job.trigger === "rebase" ? "pull-rebase" as const : "pull-merge" as const);
 
-  // Determine diff range based on job type
-  let diffRange: string;
-  let trigger: GitChangeDetails["trigger"];
-
-  if (job.type === "git-push") {
-    if (job.refs.length > 0) {
-      const ref = job.refs[0]!;
-      const isNewBranch = ref.remoteSha === "0000000000000000000000000000000000000000";
-      diffRange = isNewBranch ? `HEAD~10..HEAD` : `${ref.remoteSha}..${ref.localSha}`;
-    } else {
-      diffRange = "HEAD~5..HEAD";
-    }
-    trigger = "push";
-  } else {
-    trigger = job.trigger === "rebase" ? "pull-rebase" : "pull-merge";
-    diffRange = "ORIG_HEAD..HEAD";
-  }
-
-  // Gather change details
-  const [commitMessages, changedFiles, diffSummary] = await Promise.all([
-    runGit(["log", "--oneline", diffRange], repoPath),
-    runGit(["diff", "--name-status", diffRange], repoPath),
-    runGit(["diff", "--stat", diffRange], repoPath),
-  ]);
-
-  // Skip if nothing changed
-  if (!commitMessages && !changedFiles) {
-    return { success: true, duration_ms: 0, entriesCreated: 0 };
-  }
-
-  const overviewEntry = index.find(
-    (e) => e.project === meta.name && e.tags.includes("project-overview"),
-  ) ?? null;
-
-  const prompt = buildGitChangePrompt(meta, existing, isUpdate, {
+  const execution = await executePipeline(pipeline, {
+    type: job.type,
+    repoPath: job.repoPath,
+    headSha: job.headSha,
     trigger,
-    commitMessages,
-    changedFiles,
-    diffSummary,
-  }, overviewEntry);
+    refs: job.type === "git-push" ? job.refs : undefined,
+  }, {
+    jobFilename: "",
+    project: projectFromPath(job.repoPath),
+    onPipelineStart: (exec) => broadcastPipelineEvent("pipeline:started", {
+      executionId: exec.id,
+      pipelineName: job.type,
+    }),
+    onStageChange: (stage) => broadcastPipelineEvent("pipeline:stage-changed", {
+      executionId: "",
+      pipelineName: job.type,
+      stage,
+    }),
+  });
 
-  return runAgentAndCollect(
-    `daemon-git-${job.type}-${meta.name}`,
-    prompt,
-    repoPath,
-    index,
-  );
+  // Read summarize stage output for entries count and persist to manifest
+  try {
+    const summarizeOutput = StageOutputSchema.parse(await readMessage(execution.id, "summarize"));
+    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
+    await writeManifest(execution.id, execution);
+  } catch {
+    // summarize stage may have been skipped
+  }
+
+  return buildJobResult(execution);
 }
 
 // ── Repo sync handler ────────────────────────────────────────────────
 
 async function handleRepoSync(job: Job): Promise<JobResult> {
   if (job.type !== "repo-sync") throw new Error("Expected repo-sync job");
-  const repoPath = job.repoPath;
 
-  const meta = await resolveRepoMeta(repoPath);
-  const repoContext = await gatherRepoContext(repoPath);
-  const index = await loadIndex();
-  const existing = index.filter(
-    (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-  );
-  const isUpdate = existing.length > 0;
-  const overviewEntry = index.find(
-    (e) => e.project === meta.name && e.tags.includes("project-overview"),
-  ) ?? null;
+  const execution = await executePipeline(repoSyncPipeline, {
+    repoPath: job.repoPath,
+  }, {
+    jobFilename: "",
+    project: projectFromPath(job.repoPath),
+    onPipelineStart: (exec) => broadcastPipelineEvent("pipeline:started", {
+      executionId: exec.id,
+      pipelineName: "repo-sync",
+    }),
+    onStageChange: (stage) => broadcastPipelineEvent("pipeline:stage-changed", {
+      executionId: "",
+      pipelineName: "repo-sync",
+      stage,
+    }),
+  });
 
-  const prompt = buildRepoPrompt(meta, repoContext, existing, isUpdate, overviewEntry);
+  // Read summarize stage output for entries count and persist to manifest
+  try {
+    const summarizeOutput = StageOutputSchema.parse(await readMessage(execution.id, "summarize"));
+    execution.entriesCreated = summarizeOutput.entriesCreated ?? 0;
+    await writeManifest(execution.id, execution);
+  } catch {
+    // summarize stage may have been skipped
+  }
 
-  return runAgentAndCollect(
-    `daemon-repo-sync-${meta.name}`,
-    prompt,
-    repoPath,
-    index,
-  );
+  return buildJobResult(execution);
 }
 
 // ── Register built-in handlers ────────────────────────────────────────

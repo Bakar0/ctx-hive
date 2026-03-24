@@ -180,7 +180,7 @@ export async function search(
       cwd: meta.cwd,
       sessionId: meta.sessionId,
       resultCount: finalResults.length,
-      results: finalResults.map((r) => ({ id: r.id, title: r.title, score: r.score })),
+      results: finalResults.map((r) => ({ id: r.id, title: r.title, score: r.score, tokens: r.tokens })),
       durationMs: Date.now() - start,
     });
   }

@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { z } from "zod";
 import { hiveRoot } from "../ctx/store.ts";
 import { resolveRepoMeta } from "../ctx/init.ts";
+import { patchRepoHooks } from "../hooks/git-installer.ts";
 
 // ── Schemas & Types ───────────────────────────────────────────────────
 
@@ -82,6 +83,10 @@ export async function trackRepo(absPath: string): Promise<TrackedRepo> {
 
   repos.push(tracked);
   await saveTrackedRepos(repos);
+
+  // Patch repo-local hooks if the repo has a local core.hooksPath (e.g. husky)
+  await patchRepoHooks(normalized);
+
   return tracked;
 }
 
@@ -95,10 +100,30 @@ export async function untrackRepo(absPath: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Find the tracked repo that contains the given path.
+ * Matches exactly or by ancestor (path is inside a tracked repo).
+ * Returns the most specific (deepest) match.
+ */
+export function findTrackedRepoFor(
+  path: string,
+  repos: TrackedRepo[],
+): TrackedRepo | undefined {
+  const normalized = resolve(path);
+  const exact = repos.find((r) => r.absPath === normalized);
+  if (exact) return exact;
+  let best: TrackedRepo | undefined;
+  for (const r of repos) {
+    if (normalized.startsWith(r.absPath + "/")) {
+      if (!best || r.absPath.length > best.absPath.length) best = r;
+    }
+  }
+  return best;
+}
+
 export async function isTracked(absPath: string): Promise<boolean> {
-  const normalized = resolve(absPath);
   const repos = await loadTrackedRepos();
-  return repos.some((r) => r.absPath === normalized);
+  return findTrackedRepoFor(absPath, repos) !== undefined;
 }
 
 export async function updateLastScanned(absPath: string): Promise<void> {

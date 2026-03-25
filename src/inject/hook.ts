@@ -18,6 +18,57 @@ const MAX_RESULTS = 5;
 const MIN_SCORE_THRESHOLD = 0.2;
 const MIN_QUERY_TOKENS = 3;
 
+// ── Adaptive retrieval gate ─────────────────────────────────────────────
+
+/** Prompts that are commands/confirmations, not knowledge-seeking queries. */
+const SKIP_PATTERNS = [
+  /^\/\w/,                              // slash commands: /commit, /review, /help
+  /^!.+/,                               // shell passthrough: ! git status
+  /^(y(es)?|no?|ok(ay)?|sure|do it|go ahead|proceed|confirm|cancel|abort|stop|quit|exit|done|thanks|thank you|lgtm|ship it)$/i,
+  /^(commit|push|pull|merge|rebase|cherry-pick|stash|reset|checkout|branch|tag)\b/i,
+  /^(run|execute|start|build|test|lint|deploy|install)\s/i,
+  /^(fix|refactor|rename|move|delete|remove|add|create|update|change|replace|swap)\s+(it|this|that|the)\b/i,
+];
+
+/** Signals that a prompt is likely seeking knowledge and should trigger retrieval. */
+const SEARCH_SIGNALS = [
+  /\?/,                                 // questions
+  /\b(how|why|what|where|when|which|explain|describe|tell me|help me understand)\b/i,
+  /\b(architecture|design|decision|pattern|convention|constraint|gotcha|caveat|limitation|workaround)\b/i,
+  /\b(history|context|background|rationale|reason|motivation|trade-?off)\b/i,
+];
+
+/**
+ * Decide whether a prompt is worth searching for context.
+ * Returns false for action commands and confirmations where context injection adds noise.
+ */
+export function shouldSearch(prompt: string, tokens: string[]): boolean {
+  const trimmed = prompt.trim();
+
+  // Too short to be a knowledge query
+  if (tokens.length < MIN_QUERY_TOKENS) return false;
+
+  // Explicit skip patterns (commands, confirmations, imperative actions)
+  for (const pat of SKIP_PATTERNS) {
+    if (pat.test(trimmed)) return false;
+  }
+
+  // Prompts that look like pure code (>60% non-alpha chars) are unlikely to benefit
+  const alphaRatio = (trimmed.match(/[a-zA-Z]/g)?.length ?? 0) / Math.max(trimmed.length, 1);
+  if (alphaRatio < 0.4 && tokens.length < 8) return false;
+
+  // If any search signal is present, always search
+  for (const pat of SEARCH_SIGNALS) {
+    if (pat.test(trimmed)) return true;
+  }
+
+  // For medium-length prompts without clear signals, search anyway (the user may be
+  // describing a problem). Only skip very short non-signal prompts.
+  if (tokens.length < 5) return false;
+
+  return true;
+}
+
 // ── Hook payload schema ────────────────────────────────────────────────
 
 const HookPayloadSchema = z.object({
@@ -46,6 +97,7 @@ function formatInjectResult(results: SearchResult[]): string {
     "",
     "---",
     'Use `ctx-hive search "<query>"` or `ctx-hive show <id>` for full entries.',
+    'If you use any of the above context in your response, mention each entry you referenced using this format: "📚 Referenced ctx-hive entry: <entry title>"',
   ].join("\n");
 }
 
@@ -137,9 +189,9 @@ export async function handleInject(): Promise<void> {
     // Extract prompt text
     const promptText = payload.prompt;
 
-    // Short-circuit on short prompts
+    // Adaptive retrieval gate — skip commands, confirmations, and non-knowledge prompts
     const tokens = tokenize(promptText);
-    if (tokens.length < MIN_QUERY_TOKENS) {
+    if (!shouldSearch(promptText, tokens)) {
       console.log("{}");
       return;
     }

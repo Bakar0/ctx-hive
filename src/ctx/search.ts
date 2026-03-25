@@ -20,6 +20,23 @@ export interface SearchResult extends IndexEntry {
 
 // ── Tokenizer ──────────────────────────────────────────────────────────
 
+const STOPWORDS = new Set([
+  "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+  "should", "may", "might", "must", "can", "could",
+  "i", "me", "my", "we", "our", "you", "your", "it", "its",
+  "this", "that", "these", "those", "there", "here",
+  "of", "in", "to", "for", "with", "on", "at", "from", "by", "about",
+  "as", "into", "through", "during", "before", "after", "above", "below",
+  "and", "but", "or", "nor", "not", "so", "if", "then", "than",
+  "also", "just", "only", "very", "too", "some", "any", "all", "each",
+  // Imperative verbs common in prompts but low-signal for search
+  "fix", "add", "implement", "refactor", "update", "change", "make",
+  "create", "write", "move", "remove", "delete", "get", "set",
+  "use", "try", "check", "look", "find", "see", "show", "tell",
+  "need", "want", "like", "please", "help",
+]);
+
 export function tokenize(query: string): string[] {
   return query
     .toLowerCase()
@@ -28,10 +45,42 @@ export function tokenize(query: string): string[] {
     .filter((t) => t.length > 0);
 }
 
+/**
+ * Remove stopwords and low-signal verbs from tokens for FTS5 queries.
+ * Always keeps at least one token (the longest) to avoid empty queries.
+ */
+export function filterTokens(tokens: string[]): string[] {
+  const filtered = tokens.filter((t) => !STOPWORDS.has(t) && t.length > 1);
+  if (filtered.length === 0 && tokens.length > 0) {
+    // Keep the longest token as a fallback
+    return [tokens.reduce((a, b) => (a.length >= b.length ? a : b))];
+  }
+  return filtered;
+}
+
 // ── FTS5 query builder ─────────────────────────────────────────────────
 
-function buildFtsQuery(tokens: string[]): string {
-  // Use prefix matching for each token, OR between them for broad recall
+/**
+ * Build an FTS5 query from tokens.
+ * - Single token: prefix match ("token"*)
+ * - Multiple tokens: AND between terms for precision, prefix on last token for typeahead
+ * - Falls back to OR if AND produces no results (caller handles this)
+ */
+export function buildFtsQuery(tokens: string[]): string {
+  if (tokens.length === 0) return "";
+  if (tokens.length === 1) return `"${tokens[0]}"*`;
+
+  // AND between all terms; prefix match only on the last token (typeahead)
+  const parts = tokens.map((t, i) =>
+    i === tokens.length - 1 ? `"${t}"*` : `"${t}"`,
+  );
+  return parts.join(" AND ");
+}
+
+/**
+ * Build a fallback OR query for when AND is too restrictive.
+ */
+export function buildFtsQueryOr(tokens: string[]): string {
   return tokens.map((t) => `"${t}"*`).join(" OR ");
 }
 
@@ -56,41 +105,49 @@ export function search(
   meta?: SearchMeta,
 ): SearchResult[] {
   const start = Date.now();
-  const tokens = tokenize(query);
-  if (tokens.length === 0) return [];
+  const rawTokens = tokenize(query);
+  if (rawTokens.length === 0) return [];
 
-  const ftsQuery = buildFtsQuery(tokens);
+  const searchTokens = filterTokens(rawTokens);
+  const ftsQuery = buildFtsQuery(searchTokens);
+  if (ftsQuery === "") return [];
   const db = getDb();
 
-  // Build WHERE clauses for filters
-  const conditions: string[] = ["entries_fts MATCH ?"];
-  const params: (string | number)[] = [ftsQuery];
+  // Helper to run FTS5 query with filters
+  function runFtsQuery(matchQuery: string): FtsRow[] {
+    const conditions: string[] = ["entries_fts MATCH ?"];
+    const params: (string | number)[] = [matchQuery];
 
-  if (filters.scope) {
-    conditions.push("e.scope = ?");
-    params.push(filters.scope);
+    if (filters.scope) {
+      conditions.push("e.scope = ?");
+      params.push(filters.scope);
+    }
+    if (filters.project !== undefined) {
+      conditions.push("e.project = ?");
+      params.push(filters.project);
+    }
+
+    const sql = `
+      SELECT e.id, e.title, e.slug, e.scope, e.tags, e.project,
+             SUBSTR(e.body, 1, 150) as body, e.tokens,
+             e.created_at, e.updated_at,
+             bm25(entries_fts, 5.0, 3.0, 1.0) as fts_score,
+             snippet(entries_fts, 2, '', '', '...', 32) as excerpt
+      FROM entries_fts
+      JOIN entries e ON entries_fts.rowid = e.rowid
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY fts_score
+      LIMIT ?
+    `;
+    params.push(limit * 3);
+    return db.prepare<FtsRow, (string | number)[]>(sql).all(...params);
   }
-  if (filters.project !== undefined) {
-    conditions.push("e.project = ?");
-    params.push(filters.project);
+
+  // Try AND query first (precise), fall back to OR (broad recall) if no results
+  let rows = runFtsQuery(ftsQuery);
+  if (rows.length === 0 && searchTokens.length > 1) {
+    rows = runFtsQuery(buildFtsQueryOr(searchTokens));
   }
-
-  // BM25 weights: title=5, tags=3, body=1 (matching original TAG/TITLE/CONTENT weights)
-  const sql = `
-    SELECT e.id, e.title, e.slug, e.scope, e.tags, e.project,
-           SUBSTR(e.body, 1, 150) as body, e.tokens,
-           e.created_at, e.updated_at,
-           bm25(entries_fts, 5.0, 3.0, 1.0) as fts_score,
-           snippet(entries_fts, 2, '', '', '...', 32) as excerpt
-    FROM entries_fts
-    JOIN entries e ON entries_fts.rowid = e.rowid
-    WHERE ${conditions.join(" AND ")}
-    ORDER BY fts_score
-    LIMIT ?
-  `;
-  params.push(limit * 3); // Fetch extra to allow signal boosting to reorder
-
-  const rows = db.prepare<FtsRow, (string | number)[]>(sql).all(...params);
 
   // Apply tag filter (FTS5 can't filter by exact tag membership)
   let filtered = rows;
@@ -127,13 +184,16 @@ export function search(
   });
 
   // Sort by score descending and normalize to 0-1
+  // Use a fixed reference score so a single weak result doesn't inflate to 1.0.
+  // The reference is the greater of the top result's score and a calibrated floor.
+  // BM25 absolute scores typically range 0.5-15+ depending on match quality;
+  // a floor of 2.0 ensures single weak results (score ~0.5) normalize to ~0.25.
+  const NORM_FLOOR = 2.0;
   results.sort((a, b) => b.score - a.score);
-  const maxScore = results.length > 0 ? results[0]!.score : 1;
   const finalResults = results.slice(0, limit);
-  if (maxScore > 0) {
-    for (const r of finalResults) {
-      r.score = Math.round((r.score / maxScore) * 100) / 100;
-    }
+  const maxScore = finalResults.length > 0 ? Math.max(finalResults[0]!.score, NORM_FLOOR) : 1;
+  for (const r of finalResults) {
+    r.score = Math.round(Math.min(1, r.score / maxScore) * 100) / 100;
   }
 
   // Record which entries were served

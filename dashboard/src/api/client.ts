@@ -60,7 +60,7 @@ export function getMemories(params?: {
   const sp = new URLSearchParams();
   if (params?.scope != null && params.scope !== "") sp.set("scope", params.scope);
   if (params?.project != null && params.project !== "") sp.set("project", params.project);
-  if (params?.sortBy != null && params.sortBy !== "") sp.set("sortBy", params.sortBy);
+  if (params?.sortBy != null) sp.set("sortBy", params.sortBy);
   const qs = sp.toString();
   return get(`/api/memories${qs !== "" ? `?${qs}` : ""}`);
 }

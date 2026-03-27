@@ -1070,16 +1070,25 @@ function renderJobDetail(j) {
     );
     sections.push(
       '<div style="margin-top:8px;">' +
-        '<button class="btn-copy" onclick="event.stopPropagation();rerunJob(\'' + esc(j.filename) + '\', this)">&#x21bb; Rerun</button>' +
+        '<button class="btn-copy" onclick="event.stopPropagation();rerunJob(\'' + esc(j.jobId) + '\', this)">&#x21bb; Rerun</button>' +
+      '</div>'
+    );
+  }
+
+  // ── Cancel button (processing / pending jobs) ──
+  if (j.status === 'processing' || j.status === 'pending') {
+    sections.push(
+      '<div style="margin-top:8px;">' +
+        '<button class="btn-danger" onclick="event.stopPropagation();cancelJob(\'' + esc(j.jobId) + '\', this)">&#x2715; Cancel</button>' +
       '</div>'
     );
   }
 
   // ── File reference ──
-  if (j.filename) {
+  if (j.jobId) {
     sections.push(
       '<div style="margin-top:12px;font-size:10px;color:var(--text3);font-family:var(--font);">' +
-        'File: ' + esc(j.filename) +
+        'ID: ' + esc(j.jobId) +
       '</div>'
     );
   }
@@ -1536,15 +1545,36 @@ function copySessionResume(sessionId, btn) {
   setTimeout(() => { btn.innerHTML = orig; }, 1500);
 }
 
-function rerunJob(filename, btn) {
+function rerunJob(jobId, btn) {
   const orig = btn.innerHTML;
   btn.textContent = '\u23f3';
   btn.disabled = true;
-  fetch('/api/jobs/' + encodeURIComponent(filename) + '/requeue', { method: 'POST' })
+  fetch('/api/jobs/' + encodeURIComponent(jobId) + '/requeue', { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       if (data.ok) {
         btn.textContent = '\u2713 Queued';
+        setTimeout(() => fetchJobs(), 1000);
+      } else {
+        btn.textContent = '\u2717 ' + (data.error || 'Failed');
+        btn.disabled = false;
+      }
+    })
+    .catch(() => {
+      btn.innerHTML = orig;
+      btn.disabled = false;
+    });
+}
+
+function cancelJob(jobId, btn) {
+  const orig = btn.innerHTML;
+  btn.textContent = '\u23f3';
+  btn.disabled = true;
+  fetch('/api/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        btn.textContent = '\u2713 Cancelled';
         setTimeout(() => fetchJobs(), 1000);
       } else {
         btn.textContent = '\u2717 ' + (data.error || 'Failed');

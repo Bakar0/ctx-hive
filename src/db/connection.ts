@@ -1,8 +1,31 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { ensureSchema } from "./migrate.ts";
+
+// ── sqlite-vec requires a SQLite build with extension loading ─────────
+// Bun's built-in SQLite doesn't support loadExtension, so we use the
+// system/Homebrew SQLite when available.
+const CUSTOM_SQLITE_PATHS = [
+  "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib", // macOS ARM Homebrew
+  "/usr/local/opt/sqlite3/lib/libsqlite3.dylib",   // macOS x64 Homebrew
+];
+
+for (const p of CUSTOM_SQLITE_PATHS) {
+  if (existsSync(p)) {
+    Database.setCustomSQLite(p);
+    break;
+  }
+}
+
+// Track whether sqlite-vec is available for this process
+let _sqliteVecAvailable = false;
+
+/** Returns true if sqlite-vec extension loaded successfully. */
+export function isSqliteVecAvailable(): boolean {
+  return _sqliteVecAvailable;
+}
 
 // ── Paths ─────────────────────────────────────────────────────────────
 
@@ -32,6 +55,21 @@ export function openDb(path: string): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA foreign_keys = ON");
+
+  // Try to load sqlite-vec — graceful fallback if unavailable (e.g. compiled binary)
+  try {
+    const mod: unknown = require("sqlite-vec");
+    if (mod !== null && typeof mod === "object" && "load" in mod) {
+      const loadFn = mod.load;
+      if (typeof loadFn === "function") {
+        Reflect.apply(loadFn, mod, [db]);
+        _sqliteVecAvailable = true;
+      }
+    }
+  } catch {
+    _sqliteVecAvailable = false;
+  }
+
   ensureSchema(db);
   return db;
 }

@@ -49,7 +49,7 @@ export const PipelineExecutionSchema = z.object({
   id: z.string(),
   pipelineName: z.string(),
   status: PipelineStatusSchema,
-  jobFilename: z.string(),
+  jobId: z.string(),
   project: z.string(),
   startedAt: z.string(),
   completedAt: z.string().optional(),
@@ -106,7 +106,7 @@ export interface PipelineDef {
 // ── Executor options ─────────────────────────────────────────────────
 
 export interface ExecutorOptions {
-  jobFilename: string;
+  jobId: string;
   project: string;
   onPipelineStart?: (execution: PipelineExecution) => void;
   onStageChange?: (stage: StageExecution) => void;

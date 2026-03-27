@@ -17,7 +17,7 @@ const TEST_EXEC_ID = "test-exec-001";
 function createTestExecution(): void {
   writeManifest(TEST_EXEC_ID, {
     id: TEST_EXEC_ID, pipelineName: "test", status: "running",
-    jobFilename: "test.json", project: "proj", startedAt: "2026-01-01",
+    jobId: "test", project: "proj", startedAt: "2026-01-01",
     stages: [],
   } satisfies PipelineExecution);
 }
@@ -57,7 +57,7 @@ describe("messages", () => {
       id: TEST_EXEC_ID,
       pipelineName: "test-pipeline",
       status: "running",
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test-project",
       startedAt: "2026-01-01T00:00:00.000Z",
       stages: [
@@ -75,7 +75,7 @@ describe("messages", () => {
   test("listExecutionIds includes created execution", () => {
     writeManifest(TEST_EXEC_ID, {
       id: TEST_EXEC_ID, pipelineName: "test", status: "running",
-      jobFilename: "test.json", project: "proj", startedAt: "2026-01-01",
+      jobId: "test", project: "proj", startedAt: "2026-01-01",
       stages: [],
     } satisfies PipelineExecution);
     const ids = listExecutionIds();
@@ -85,7 +85,7 @@ describe("messages", () => {
   test("cleanupMessages removes execution", () => {
     writeManifest(TEST_EXEC_ID, {
       id: TEST_EXEC_ID, pipelineName: "test", status: "running",
-      jobFilename: "test.json", project: "proj", startedAt: "2026-01-01",
+      jobId: "test", project: "proj", startedAt: "2026-01-01",
       stages: [],
     } satisfies PipelineExecution);
     writeMessage(TEST_EXEC_ID, "ingest", { data: true });

@@ -14,6 +14,7 @@
   let pipelineRef = $state<Pipeline>();
   let contextsRef = $state<Contexts>();
   let reposRef = $state<Repos>();
+  let searchRef = $state<Search>();
 
   $effect(() => {
     socket.connect();
@@ -32,6 +33,7 @@
     socket.on("repo:tracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
     socket.on("repo:untracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
     socket.on("repo:scan-complete", () => { if (page === "repos") reposRef?.fetchRepos(); });
+    socket.on("search:executed", () => { if (page === "search") searchRef?.fetchData(); });
 
     return () => socket.disconnect();
   });
@@ -61,7 +63,7 @@
     {:else if page === "repos"}
       <Repos bind:this={reposRef} />
     {:else if page === "search"}
-      <Search />
+      <Search bind:this={searchRef} />
     {/if}
   </main>
 </div>

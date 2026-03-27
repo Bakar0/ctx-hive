@@ -25,8 +25,12 @@ import {
   updateLastScanned,
 } from "../repo/tracking.ts";
 import { loadSignals } from "../ctx/signals.ts";
-import { search, type SearchFilters } from "../ctx/search.ts";
+import { search, searchMulti, type SearchFilters } from "../ctx/search.ts";
 import { loadSearchHistory, getSearchStats, type SearchSource } from "../ctx/search-history.ts";
+import { setSetting, getVectorSearchConfig } from "../ctx/settings.ts";
+import { validateApiKey } from "../ctx/embeddings.ts";
+import { countEmbeddings } from "../ctx/vector-search.ts";
+import { backfillEmbeddings, getBackfillState } from "../ctx/backfill-embeddings.ts";
 import {
   discoverRepos,
   enrichTrackedRepos,
@@ -40,7 +44,7 @@ import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/sch
 // ── Types ─────────────────────────────────────────────────────────────
 
 export interface JobView {
-  filename: string;
+  jobId: string;
   status: JobStatus;
   type: string;
   createdAt: string;
@@ -116,7 +120,7 @@ const RepoOpenBodySchema = z.object({ absPath: z.string().min(1), target: z.stri
 // ── API Functions ─────────────────────────────────────────────────────
 
 interface JobDbRow {
-  filename: string; type: string; status: string; payload: string;
+  job_id: string; type: string; status: string; payload: string;
   error: string | null; created_at: string; started_at: string | null;
   completed_at: string | null; failed_at: string | null;
   duration_ms: number | null; transcript_tokens: number | null;
@@ -131,7 +135,7 @@ const PipelineDataSchema = z.unknown();
 function jobDbRowToView(r: JobDbRow): JobView {
   const payload = PayloadSchema.parse(JSON.parse(r.payload));
   return {
-    filename: r.filename,
+    jobId: r.job_id,
     status: JobStatusSchema.parse(r.status),
     type: r.type,
     createdAt: r.created_at,
@@ -379,15 +383,27 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     return json(getAllJobs());
   }
 
-  // POST /api/jobs/:filename/requeue
+  // POST /api/jobs/:jobId/requeue
   const requeueMatch = /^\/api\/jobs\/(.+)\/requeue$/.exec(path);
   if (requeueMatch && req.method === "POST") {
-    const filename = decodeURIComponent(requeueMatch[1]!);
+    const jobId = decodeURIComponent(requeueMatch[1]!);
     const db = getDb();
     const result = db.prepare(
-      "UPDATE jobs SET status = 'pending', error = NULL, failed_at = NULL, started_at = NULL, completed_at = NULL, duration_ms = NULL, entries_created = NULL, input_tokens = NULL, output_tokens = NULL, transcript_tokens = NULL, pipeline_data = NULL WHERE filename = ? AND status = 'failed'",
-    ).run(filename);
-    if (result.changes === 0) return json({ error: "Job not found in failed/" }, 404);
+      "UPDATE jobs SET status = 'pending', error = NULL, failed_at = NULL, started_at = NULL, completed_at = NULL, duration_ms = NULL, entries_created = NULL, input_tokens = NULL, output_tokens = NULL, transcript_tokens = NULL, pipeline_data = NULL WHERE job_id = ? AND status IN ('failed', 'processing')",
+    ).run(jobId);
+    if (result.changes === 0) return json({ error: "Job not found or not in failed/processing state" }, 404);
+    return json({ ok: true });
+  }
+
+  // POST /api/jobs/:jobId/cancel — force-fail a processing or pending job
+  const cancelMatch = /^\/api\/jobs\/(.+)\/cancel$/.exec(path);
+  if (cancelMatch && req.method === "POST") {
+    const jobId = decodeURIComponent(cancelMatch[1]!);
+    const db = getDb();
+    const result = db.prepare(
+      "UPDATE jobs SET status = 'failed', error = 'manually cancelled', failed_at = ? WHERE job_id = ? AND status IN ('processing', 'pending')",
+    ).run(new Date().toISOString(), jobId);
+    if (result.changes === 0) return json({ error: "Job not found or not in cancellable state" }, 404);
     return json({ ok: true });
   }
 
@@ -430,7 +446,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
   // ── Search endpoints ──────────────────────────────────────────────────
 
-  // GET /api/search?q=...&scope=...&project=...&tags=...&limit=...
+  // GET /api/search?q=...&scope=...&project=...&tags=...&limit=...&mode=merged|full
   if (path === "/api/search" && req.method === "GET") {
     const q = url.searchParams.get("q") ?? "";
     if (q === "") return json({ error: "q parameter required" }, 400);
@@ -444,6 +460,14 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const rawSource = url.searchParams.get("source");
     const source: SearchSource = rawSource === "inject" ? "inject" : rawSource === "cli" ? "cli" : "api";
     const sessionId = url.searchParams.get("sessionId") ?? undefined;
+    const mode = url.searchParams.get("mode") ?? "merged";
+
+    if (mode === "full") {
+      const result = await searchMulti(q, filters, limit, { source, sessionId, project });
+      return json({ query: q, ...result });
+    }
+
+    // Default: backward-compatible merged-only response
     const results = search(q, filters, limit, { source, sessionId, project });
     return json({ query: q, results });
   }
@@ -460,6 +484,82 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   // GET /api/search-stats
   if (path === "/api/search-stats" && req.method === "GET") {
     return json(getSearchStats());
+  }
+
+  // ── Vector search settings endpoints ────────────────────────────────
+
+  // GET /api/settings/vector-search
+  if (path === "/api/settings/vector-search" && req.method === "GET") {
+    const config = getVectorSearchConfig();
+    const db = getDb();
+    const totalCount = db.prepare<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM entries").get()!.cnt;
+    const embeddedCount = countEmbeddings();
+    return json({
+      enabled: config.enabled,
+      model: config.model,
+      hasApiKey: config.apiKey !== null,
+      embeddedCount,
+      totalCount,
+    });
+  }
+
+  // POST /api/settings/vector-search
+  if (path === "/api/settings/vector-search" && req.method === "POST") {
+    try {
+      const body = z.object({
+        enabled: z.boolean().optional(),
+        apiKey: z.string().optional(),
+        model: z.string().optional(),
+      }).parse(await req.json());
+
+      if (typeof body.apiKey === "string" && body.apiKey !== "") {
+        const model = body.model ?? getVectorSearchConfig().model;
+        const valid = await validateApiKey(body.apiKey, model);
+        if (!valid) return json({ error: "Invalid API key — test embedding call failed" }, 400);
+        setSetting("vector_search.api_key", body.apiKey);
+      }
+
+      if (typeof body.model === "string" && body.model !== "") {
+        setSetting("vector_search.model", body.model);
+      }
+
+      let backfillStarted = false;
+      if (typeof body.enabled === "boolean") {
+        setSetting("vector_search.enabled", String(body.enabled));
+
+        // Trigger backfill when enabling with a valid key
+        if (body.enabled) {
+          const config = getVectorSearchConfig();
+          if (config.apiKey !== null) {
+            backfillEmbeddings().catch((err) =>
+              console.error("[backfill] Error:", err),
+            );
+            backfillStarted = true;
+          }
+        }
+      }
+
+      return json({ ok: true, backfillStarted });
+    } catch (err) {
+      return json({ error: errorMessage(err) }, 400);
+    }
+  }
+
+  // POST /api/settings/vector-search/backfill
+  if (path === "/api/settings/vector-search/backfill" && req.method === "POST") {
+    const config = getVectorSearchConfig();
+    if (!config.enabled || config.apiKey === null) {
+      return json({ error: "Vector search not enabled or API key not set" }, 400);
+    }
+    backfillEmbeddings().catch((err) =>
+      console.error("[backfill] Error:", err),
+    );
+    return json({ ok: true });
+  }
+
+  // GET /api/settings/vector-search/status
+  if (path === "/api/settings/vector-search/status" && req.method === "GET") {
+    return json(getBackfillState());
   }
 
   // ── Session endpoints ──────────────────────────────────────────────────

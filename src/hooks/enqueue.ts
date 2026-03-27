@@ -17,8 +17,8 @@ const HookPayloadSchema = z.object({
   reason: z.string().optional(),
 });
 
-function jobFilename(prefix: string): string {
-  return `${jobTimestamp()}-${prefix}.json`;
+function makeJobId(prefix: string): string {
+  return `${jobTimestamp()}-${prefix}`;
 }
 
 /** Fire-and-forget HTTP nudge to the daemon so it drains pending jobs immediately. */
@@ -95,7 +95,7 @@ async function enqueueSessionMine(): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  writeJob(job, jobFilename(prefix));
+  writeJob(job, makeJobId(prefix));
   await nudgeDaemon();
 }
 
@@ -139,7 +139,7 @@ async function enqueueGitPush(args: string[]): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  writeJob(job, jobFilename(`push-${repoName}`));
+  writeJob(job, makeJobId(`push-${repoName}`));
   await nudgeDaemon();
 }
 
@@ -184,6 +184,6 @@ async function enqueueGitPull(args: string[]): Promise<void> {
     createdAt: new Date().toISOString(),
   };
 
-  writeJob(job, jobFilename(`pull-${repoName}`));
+  writeJob(job, makeJobId(`pull-${repoName}`));
   await nudgeDaemon();
 }

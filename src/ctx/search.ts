@@ -4,6 +4,8 @@ import type { Scope } from "./store.ts";
 import { ScopeSchema, TagsSchema } from "./store.ts";
 import { getSignalScores, recordSearchHits } from "./signals.ts";
 import { appendSearchRecord, type SearchSource } from "./search-history.ts";
+import { isVectorSearchEnabled } from "./settings.ts";
+import { vectorSearch } from "./vector-search.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -16,6 +18,21 @@ export interface SearchFilters {
 export interface SearchResult extends IndexEntry {
   score: number;
   excerpt: string;
+  algorithms?: ("fts5" | "vector")[];
+}
+
+export type Algorithm = "fts5" | "vector";
+
+export interface AlgorithmResult {
+  algorithm: Algorithm;
+  results: SearchResult[];
+  durationMs: number;
+}
+
+export interface MultiSearchResult {
+  merged: SearchResult[];
+  algorithms: AlgorithmResult[];
+  mergeStrategy: "fts5-only" | "rrf";
 }
 
 // ── Tokenizer ──────────────────────────────────────────────────────────
@@ -84,7 +101,7 @@ export function buildFtsQueryOr(tokens: string[]): string {
   return tokens.map((t) => `"${t}"*`).join(" OR ");
 }
 
-// ── Search ─────────────────────────────────────────────────────────────
+// ── FTS5 Search ───────────────────────────────────────────────────────
 
 export interface SearchMeta {
   source?: SearchSource;
@@ -98,13 +115,14 @@ interface FtsRow extends EntryRow {
   excerpt: string;
 }
 
-export function search(
+/**
+ * Run FTS5 full-text search only. Returns scored, normalized results.
+ */
+export function ftsSearch(
   query: string,
   filters: SearchFilters = {},
   limit = 10,
-  meta?: SearchMeta,
 ): SearchResult[] {
-  const start = Date.now();
   const rawTokens = tokenize(query);
   if (rawTokens.length === 0) return [];
 
@@ -184,10 +202,6 @@ export function search(
   });
 
   // Sort by score descending and normalize to 0-1
-  // Use a fixed reference score so a single weak result doesn't inflate to 1.0.
-  // The reference is the greater of the top result's score and a calibrated floor.
-  // BM25 absolute scores typically range 0.5-15+ depending on match quality;
-  // a floor of 2.0 ensures single weak results (score ~0.5) normalize to ~0.25.
   const NORM_FLOOR = 2.0;
   results.sort((a, b) => b.score - a.score);
   const finalResults = results.slice(0, limit);
@@ -196,10 +210,133 @@ export function search(
     r.score = Math.round(Math.min(1, r.score / maxScore) * 100) / 100;
   }
 
-  // Record which entries were served
-  recordSearchHits(finalResults.map((r) => r.id));
+  return finalResults;
+}
 
-  // Record search event to history (awaited to prevent process.exit race)
+// ── Reciprocal Rank Fusion ────────────────────────────────────────────
+
+/**
+ * Merge results from multiple algorithms using Reciprocal Rank Fusion.
+ * RRF is rank-based so it avoids scale mismatch between BM25 and cosine similarity.
+ */
+export function reciprocalRankFusion(
+  resultSets: { algorithm: Algorithm; results: SearchResult[] }[],
+  k = 60,
+): SearchResult[] {
+  const rrfScores = new Map<string, { score: number; algorithms: Algorithm[]; result: SearchResult }>();
+
+  for (const { algorithm, results } of resultSets) {
+    for (let rank = 0; rank < results.length; rank++) {
+      const r = results[rank]!;
+      const rrfScore = 1 / (k + rank + 1);
+      const existing = rrfScores.get(r.id);
+
+      if (existing !== undefined) {
+        existing.score += rrfScore;
+        if (!existing.algorithms.includes(algorithm)) {
+          existing.algorithms.push(algorithm);
+        }
+        // Keep the result with the better excerpt
+        if (r.excerpt.length > existing.result.excerpt.length) {
+          existing.result = { ...r };
+        }
+      } else {
+        rrfScores.set(r.id, {
+          score: rrfScore,
+          algorithms: [algorithm],
+          result: { ...r },
+        });
+      }
+    }
+  }
+
+  // Sort by RRF score descending
+  const merged = [...rrfScores.values()]
+    .sort((a, b) => b.score - a.score)
+    .map(({ score, algorithms, result }) => ({
+      ...result,
+      score: Math.round(score * 10000) / 10000,
+      algorithms,
+    }));
+
+  // Normalize scores to 0-1
+  if (merged.length > 0) {
+    const maxScore = merged[0]!.score;
+    for (const r of merged) {
+      r.score = maxScore > 0 ? Math.round((r.score / maxScore) * 100) / 100 : 0;
+    }
+  }
+
+  return merged;
+}
+
+// ── Multi-algorithm search ────────────────────────────────────────────
+
+/**
+ * Run all enabled search algorithms in parallel and merge results.
+ */
+export async function searchMulti(
+  query: string,
+  filters: SearchFilters = {},
+  limit = 10,
+  meta?: SearchMeta,
+): Promise<MultiSearchResult> {
+  const overallStart = Date.now();
+  const algorithms: AlgorithmResult[] = [];
+  const vectorEnabled = isVectorSearchEnabled();
+
+  // Run FTS5 (always) and vector search (if enabled) in parallel
+  const ftsStart = Date.now();
+  const ftsPromise = Promise.resolve(ftsSearch(query, filters, limit));
+
+  const vecPromise = vectorEnabled
+    ? (async () => {
+        const vecStart = Date.now();
+        const results = await vectorSearch(query, filters, limit);
+        return { results, durationMs: Date.now() - vecStart };
+      })()
+    : null;
+
+  const [ftsResults, vecResult] = await Promise.all([
+    ftsPromise.then((results) => ({
+      results,
+      durationMs: Date.now() - ftsStart,
+    })),
+    vecPromise,
+  ]);
+
+  algorithms.push({
+    algorithm: "fts5" as const,
+    results: ftsResults.results,
+    durationMs: ftsResults.durationMs,
+  });
+
+  if (vecResult !== null) {
+    algorithms.push({
+      algorithm: "vector" as const,
+      results: vecResult.results,
+      durationMs: vecResult.durationMs,
+    });
+  }
+
+  // Merge results
+  let merged: SearchResult[];
+  let mergeStrategy: "fts5-only" | "rrf";
+
+  if (vecResult !== null && vecResult.results.length > 0) {
+    merged = reciprocalRankFusion(
+      algorithms.map((a) => ({ algorithm: a.algorithm, results: a.results })),
+    ).slice(0, limit);
+    mergeStrategy = "rrf";
+  } else {
+    merged = ftsResults.results.map((r) => ({ ...r, algorithms: ["fts5" as const] }));
+    mergeStrategy = "fts5-only";
+  }
+
+  // Record search hits for merged results
+  recordSearchHits(merged.map((r) => r.id));
+
+  // Record search event to history
   if (meta?.source) {
     appendSearchRecord({
       timestamp: new Date().toISOString(),
@@ -208,13 +345,58 @@ export function search(
       project: meta.project,
       cwd: meta.cwd,
       sessionId: meta.sessionId,
-      resultCount: finalResults.length,
-      results: finalResults.map((r) => ({ id: r.id, title: r.title, score: r.score, tokens: r.tokens })),
-      durationMs: Date.now() - start,
+      resultCount: merged.length,
+      results: merged.map((r) => ({
+        id: r.id,
+        title: r.title,
+        score: r.score,
+        tokens: r.tokens,
+        algorithm: r.algorithms?.join(",") ?? "fts5",
+      })),
+      durationMs: Date.now() - overallStart,
+      ftsDurationMs: ftsResults.durationMs,
+      vectorDurationMs: vecResult?.durationMs,
     });
   }
 
-  return finalResults;
+  return { merged, algorithms, mergeStrategy };
+}
+
+// ── Backward-compatible search (sync wrapper) ─────────────────────────
+
+/**
+ * Backward-compatible synchronous search. Uses FTS5 only.
+ * For multi-algorithm search, use searchMulti() instead.
+ */
+export function search(
+  query: string,
+  filters: SearchFilters = {},
+  limit = 10,
+  meta?: SearchMeta,
+): SearchResult[] {
+  const start = Date.now();
+  const results = ftsSearch(query, filters, limit);
+
+  // Record search hits
+  recordSearchHits(results.map((r) => r.id));
+
+  // Record search event to history
+  if (meta?.source) {
+    appendSearchRecord({
+      timestamp: new Date().toISOString(),
+      source: meta.source,
+      query,
+      project: meta.project,
+      cwd: meta.cwd,
+      sessionId: meta.sessionId,
+      resultCount: results.length,
+      results: results.map((r) => ({ id: r.id, title: r.title, score: r.score, tokens: r.tokens })),
+      durationMs: Date.now() - start,
+      ftsDurationMs: Date.now() - start,
+    });
+  }
+
+  return results;
 }
 
 // ── Formatters ─────────────────────────────────────────────────────────

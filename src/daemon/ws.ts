@@ -70,6 +70,10 @@ export function broadcastPipelineEvent(
   broadcast(type, data);
 }
 
+export function broadcastSearchEvent(data: unknown): void {
+  broadcast("search:executed", data);
+}
+
 // ── Periodic metrics push (dirty-flag gated) ──────────────────────────
 
 let metricsInterval: ReturnType<typeof setInterval> | null = null;

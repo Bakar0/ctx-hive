@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { isSqliteVecAvailable } from "./connection.ts";
 
 // ── Public API ────────────────────────────────────────────────────────
 
@@ -15,7 +16,12 @@ export function ensureSchema(db: Database): void {
   if (currentVersion < 1) {
     migrateToV1(db);
   }
-  // Future: if (currentVersion < 2) migrateToV2(db);
+  if (currentVersion < 2) {
+    migrateToV2(db);
+  }
+  if (currentVersion < 3) {
+    migrateToV3(db);
+  }
 }
 
 // ── V1 Schema ─────────────────────────────────────────────────────────
@@ -203,4 +209,49 @@ function migrateToV1(db: Database): void {
   });
 
   migrate();
+}
+
+// ── V2 Schema: Rename filename → job_id ──────────────────────────────
+
+
+function migrateToV2(db: Database): void {
+  const migrate = db.transaction(() => {
+    db.exec("ALTER TABLE jobs RENAME COLUMN filename TO job_id");
+    db.exec("ALTER TABLE pipeline_executions RENAME COLUMN job_filename TO job_id");
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '2')");
+  });
+
+  migrate();
+}
+
+// ── V3 Schema: Settings, vector search, per-algorithm metrics ─────────
+
+function migrateToV3(db: Database): void {
+  const migrate = db.transaction(() => {
+    // ── Settings key-value store ─────────────────────────────────
+    db.exec(`CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )`);
+
+    // ── Per-algorithm timing on search history ───────────────────
+    db.exec("ALTER TABLE search_history ADD COLUMN fts_duration_ms INTEGER");
+    db.exec("ALTER TABLE search_history ADD COLUMN vector_duration_ms INTEGER");
+
+    // ── Algorithm provenance on search results ───────────────────
+    db.exec("ALTER TABLE search_results ADD COLUMN algorithm TEXT NOT NULL DEFAULT 'fts5'");
+
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '3')");
+  });
+
+  migrate();
+
+  // ── vec0 virtual table (outside transaction — vtable DDL can't be transactional)
+  // Only create if sqlite-vec extension is loaded (not available in compiled binaries)
+  if (isSqliteVecAvailable()) {
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS vec_entries USING vec0(
+      entry_id TEXT PRIMARY KEY,
+      embedding float[1536]
+    )`);
+  }
 }

@@ -16,8 +16,10 @@ export interface SearchRecord {
   cwd?: string;
   sessionId?: string;
   resultCount: number;
-  results: { id: string; title: string; score: number; tokens: number }[];
+  results: { id: string; title: string; score: number; tokens: number; algorithm?: string }[];
   durationMs: number;
+  ftsDurationMs?: number;
+  vectorDurationMs?: number;
 }
 
 export interface SearchStats {
@@ -36,18 +38,21 @@ export function appendSearchRecord(record: SearchRecord): void {
 
   const tx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO search_history (timestamp, source, query, project, cwd, session_id, result_count, duration_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(record.timestamp, record.source, record.query, record.project ?? null,
-      record.cwd ?? null, record.sessionId ?? null, record.resultCount, record.durationMs);
+      INSERT INTO search_history (timestamp, source, query, project, cwd, session_id, result_count, duration_ms, fts_duration_ms, vector_duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.timestamp, record.source, record.query, record.project ?? null,
+      record.cwd ?? null, record.sessionId ?? null, record.resultCount, record.durationMs,
+      record.ftsDurationMs ?? null, record.vectorDurationMs ?? null,
+    );
 
     const { id: historyId } = db.prepare<{ id: number }, []>("SELECT last_insert_rowid() as id").get()!;
 
     const insertResult = db.prepare(
-      "INSERT INTO search_results (history_id, entry_id, title, score, tokens) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO search_results (history_id, entry_id, title, score, tokens, algorithm) VALUES (?, ?, ?, ?, ?, ?)",
     );
     for (const r of record.results) {
-      insertResult.run(historyId, r.id, r.title, r.score, r.tokens);
+      insertResult.run(historyId, r.id, r.title, r.score, r.tokens, r.algorithm ?? "fts5");
     }
   });
   tx();
@@ -81,9 +86,11 @@ export function loadSearchHistory(opts?: {
     id: number; timestamp: string; source: string; query: string;
     project: string | null; cwd: string | null; session_id: string | null;
     result_count: number; duration_ms: number;
+    fts_duration_ms: number | null; vector_duration_ms: number | null;
   }
   const historyRows = db.prepare<HistoryRow, (string | number)[]>(`
-    SELECT h.id, h.timestamp, h.source, h.query, h.project, h.cwd, h.session_id, h.result_count, h.duration_ms
+    SELECT h.id, h.timestamp, h.source, h.query, h.project, h.cwd, h.session_id,
+           h.result_count, h.duration_ms, h.fts_duration_ms, h.vector_duration_ms
     FROM search_history h
     ${where}
     ORDER BY h.timestamp DESC
@@ -96,10 +103,10 @@ export function loadSearchHistory(opts?: {
   const historyIds = historyRows.map((h) => h.id);
   const placeholders = historyIds.map(() => "?").join(",");
   interface ResultRow {
-    history_id: number; entry_id: string; title: string; score: number; tokens: number;
+    history_id: number; entry_id: string; title: string; score: number; tokens: number; algorithm: string;
   }
   const resultRows = db.prepare<ResultRow, number[]>(`
-    SELECT history_id, entry_id, title, score, tokens
+    SELECT history_id, entry_id, title, score, tokens, algorithm
     FROM search_results
     WHERE history_id IN (${placeholders})
   `).all(...historyIds);
@@ -107,7 +114,7 @@ export function loadSearchHistory(opts?: {
   const resultsByHistory = new Map<number, SearchRecord["results"]>();
   for (const r of resultRows) {
     const list = resultsByHistory.get(r.history_id) ?? [];
-    list.push({ id: r.entry_id, title: r.title, score: r.score, tokens: r.tokens });
+    list.push({ id: r.entry_id, title: r.title, score: r.score, tokens: r.tokens, algorithm: r.algorithm });
     resultsByHistory.set(r.history_id, list);
   }
 
@@ -121,6 +128,8 @@ export function loadSearchHistory(opts?: {
     resultCount: h.result_count,
     results: resultsByHistory.get(h.id) ?? [],
     durationMs: h.duration_ms,
+    ftsDurationMs: h.fts_duration_ms ?? undefined,
+    vectorDurationMs: h.vector_duration_ms ?? undefined,
   }));
 }
 

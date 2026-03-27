@@ -72,6 +72,8 @@
     void fetchPipelines();
   });
 
+  let busyActions = $state<Set<string>>(new Set());
+
   function toggleExpand(id: string) {
     const next = new Set(expanded);
     if (next.has(id)) next.delete(id);
@@ -79,10 +81,35 @@
     expanded = next;
   }
 
+  async function handleCancel(executionId: string) {
+    busyActions = new Set([...busyActions, executionId]);
+    try {
+      await api.cancelPipeline(executionId);
+      await fetchPipelines();
+    } finally {
+      const next = new Set(busyActions);
+      next.delete(executionId);
+      busyActions = next;
+    }
+  }
+
+  async function handleRerun(executionId: string) {
+    busyActions = new Set([...busyActions, executionId]);
+    try {
+      await api.rerunPipeline(executionId);
+      await fetchPipelines();
+    } finally {
+      const next = new Set(busyActions);
+      next.delete(executionId);
+      busyActions = next;
+    }
+  }
+
   function stageProgress(p: PipelineExecution): { text: string; css: string } {
     const completed = p.stages.filter((s) => s.status === "completed").length;
     const total = p.stages.length;
     if (p.status === "completed") return { text: `\u2713 ${completed}/${total}`, css: "text-success" };
+    if (p.status === "requeued") return { text: `\u21bb requeued`, css: "text-muted-foreground" };
     if (p.status === "failed") {
       const failed = p.stages.find((s) => s.status === "failed");
       return { text: `\u2717 ${failed?.name ?? "?"} (${completed}/${total})`, css: "text-destructive" };
@@ -94,11 +121,12 @@
     return { text: `0/${total}`, css: "text-muted-foreground" };
   }
 
-  function statusBadge(status: string): "pending" | "processing" | "done" | "failed" {
+  function statusBadge(status: string): "pending" | "processing" | "done" | "failed" | "secondary" {
     switch (status) {
       case "running": return "processing";
       case "completed": return "done";
       case "failed": return "failed";
+      case "requeued": return "secondary";
       default: return "pending";
     }
   }
@@ -169,6 +197,7 @@
     <option value="running">Running</option>
     <option value="completed">Completed</option>
     <option value="failed">Failed</option>
+    <option value="requeued">Requeued</option>
   </select>
   <span class="text-xs text-muted-foreground ml-auto">{filtered.length} pipeline{filtered.length !== 1 ? "s" : ""}</span>
 </div>
@@ -186,6 +215,7 @@
         <th class="text-left px-3 py-2 font-medium text-muted-foreground">Duration</th>
         <th class="text-left px-3 py-2 font-medium text-muted-foreground">Entries</th>
         <th class="text-left px-3 py-2 font-medium text-muted-foreground">Started</th>
+        <th class="text-left px-3 py-2 font-medium text-muted-foreground w-20"></th>
       </tr>
     </thead>
     <tbody>
@@ -210,11 +240,26 @@
           <td class="px-3 py-2 font-mono">{p.totalDurationMs != null ? formatDuration(p.totalDurationMs) : "—"}</td>
           <td class="px-3 py-2 font-mono">{p.entriesCreated ?? 0}</td>
           <td class="px-3 py-2">{timeAgo(p.startedAt)}</td>
+          <td class="px-3 py-2">
+            {#if p.status === "running" || p.status === "pending"}
+              <button
+                class="px-2 py-0.5 rounded text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
+                disabled={busyActions.has(p.id)}
+                onclick={(e: MouseEvent) => { e.stopPropagation(); void handleCancel(p.id); }}
+              >Cancel</button>
+            {:else if p.status === "failed"}
+              <button
+                class="px-2 py-0.5 rounded text-primary hover:bg-primary/10 transition-colors disabled:opacity-50"
+                disabled={busyActions.has(p.id)}
+                onclick={(e: MouseEvent) => { e.stopPropagation(); void handleRerun(p.id); }}
+              >Rerun</button>
+            {/if}
+          </td>
         </tr>
 
         {#if expanded.has(p.id)}
           <tr class="border-t border-border bg-muted/20">
-            <td colspan="8" class="px-6 py-3">
+            <td colspan="9" class="px-6 py-3">
               <div class="grid grid-cols-2 gap-x-8 gap-y-1.5 text-xs">
                 {#each p.stages as stage}
                   <div class="flex items-center gap-2">
@@ -242,7 +287,7 @@
 
       {#if pageItems.length === 0}
         <tr>
-          <td colspan="8" class="px-3 py-8 text-center text-muted-foreground">No pipelines found</td>
+          <td colspan="9" class="px-3 py-8 text-center text-muted-foreground">No pipelines found</td>
         </tr>
       {/if}
     </tbody>

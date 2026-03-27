@@ -22,6 +22,12 @@ export function ensureSchema(db: Database): void {
   if (currentVersion < 3) {
     migrateToV3(db);
   }
+  if (currentVersion < 4) {
+    migrateToV4(db);
+  }
+  if (currentVersion < 5) {
+    migrateToV5(db);
+  }
 }
 
 // ── V1 Schema ─────────────────────────────────────────────────────────
@@ -254,4 +260,70 @@ function migrateToV3(db: Database): void {
       embedding float[1536]
     )`);
   }
+}
+
+// ── V4: Backfill empty job_id in pipeline_executions ──────────────────
+
+function migrateToV4(db: Database): void {
+  const migrate = db.transaction(() => {
+    // Backfill empty job_id by matching pipeline executions to jobs via timestamp proximity
+    interface BackfillRow { pe_id: string; pe_pipeline_name: string; pe_started_at: string }
+    const rows = db.prepare<BackfillRow, []>(
+      "SELECT id AS pe_id, pipeline_name AS pe_pipeline_name, started_at AS pe_started_at FROM pipeline_executions WHERE job_id = ''",
+    ).all();
+
+    interface MatchRow { job_id: string }
+    const matchStmt = db.prepare<MatchRow, [string, string, string]>(`
+      SELECT job_id FROM jobs
+      WHERE type = ? AND started_at IS NOT NULL
+        AND ABS(strftime('%s', started_at) - strftime('%s', ?)) < 30
+      ORDER BY ABS(strftime('%s', started_at) - strftime('%s', ?))
+      LIMIT 1
+    `);
+
+    const updateStmt = db.prepare("UPDATE pipeline_executions SET job_id = ? WHERE id = ?");
+
+    for (const row of rows) {
+      const match = matchStmt.get(row.pe_pipeline_name, row.pe_started_at, row.pe_started_at);
+      if (match != null) {
+        updateStmt.run(match.job_id, row.pe_id);
+      }
+    }
+
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '4')");
+  });
+
+  migrate();
+}
+
+// ── V5: Add 'requeued' status to pipeline_executions ────────────────
+
+function migrateToV5(db: Database): void {
+  const migrate = db.transaction(() => {
+    // SQLite can't ALTER CHECK constraints, so recreate the table with the new status value
+    db.exec(`CREATE TABLE pipeline_executions_new (
+      id                  TEXT PRIMARY KEY,
+      pipeline_name       TEXT NOT NULL,
+      status              TEXT NOT NULL CHECK(status IN ('pending', 'running', 'completed', 'failed', 'requeued')),
+      job_id              TEXT NOT NULL,
+      project             TEXT NOT NULL,
+      started_at          TEXT NOT NULL,
+      completed_at        TEXT,
+      total_duration_ms   INTEGER,
+      total_input_tokens  INTEGER,
+      total_output_tokens INTEGER,
+      total_cost_usd      REAL,
+      entries_created     INTEGER
+    )`);
+    db.exec("INSERT INTO pipeline_executions_new SELECT * FROM pipeline_executions");
+    db.exec("DROP TABLE pipeline_executions");
+    db.exec("ALTER TABLE pipeline_executions_new RENAME TO pipeline_executions");
+    db.exec("CREATE INDEX idx_executions_project ON pipeline_executions(project)");
+    db.exec("CREATE INDEX idx_executions_status ON pipeline_executions(status)");
+    db.exec("CREATE INDEX idx_executions_started ON pipeline_executions(started_at)");
+
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '5')");
+  });
+
+  migrate();
 }

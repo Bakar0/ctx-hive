@@ -46,8 +46,16 @@ export function getJobs(): Promise<JobView[]> {
   return get("/api/jobs");
 }
 
-export function requeueJob(filename: string): Promise<{ ok: boolean }> {
-  return post(`/api/jobs/${encodeURIComponent(filename)}/requeue`);
+export function requeueJob(jobId: string): Promise<{ ok: boolean }> {
+  return post(`/api/jobs/${encodeURIComponent(jobId)}/requeue`);
+}
+
+export function cancelJob(jobId: string): Promise<{ ok: boolean }> {
+  return post(`/api/jobs/${encodeURIComponent(jobId)}/cancel`);
+}
+
+export function nudgeJobs(): Promise<{ ok: boolean }> {
+  return post("/api/jobs/nudge");
 }
 
 // ── Memories ─────────────────────────────────────────────────────────
@@ -206,4 +214,12 @@ export function getPipelineStats(): Promise<PipelineStats> {
 
 export function getStageMessage(executionId: string, stageName: string): Promise<unknown> {
   return get(`/api/pipelines/${encodeURIComponent(executionId)}/messages/${encodeURIComponent(stageName)}`);
+}
+
+export function cancelPipeline(executionId: string): Promise<{ ok: boolean }> {
+  return post(`/api/pipelines/${encodeURIComponent(executionId)}/cancel`);
+}
+
+export function rerunPipeline(executionId: string): Promise<{ ok: boolean }> {
+  return post(`/api/pipelines/${encodeURIComponent(executionId)}/rerun`);
 }

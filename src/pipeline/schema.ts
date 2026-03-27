@@ -42,6 +42,7 @@ export const PipelineStatusSchema = z.enum([
   "running",
   "completed",
   "failed",
+  "requeued",
 ]);
 export type PipelineStatus = z.infer<typeof PipelineStatusSchema>;
 

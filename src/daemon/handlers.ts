@@ -44,7 +44,12 @@ export async function extractTranscriptTokens(transcriptPath: string): Promise<n
 
 // ── Handler type ──────────────────────────────────────────────────────
 
-export type JobHandler = (job: Job) => Promise<JobResult>;
+export interface HandlerContext {
+  jobId: string;
+  signal: AbortSignal;
+}
+
+export type JobHandler = (job: Job, ctx: HandlerContext) => Promise<JobResult>;
 
 // ── Handler registry ──────────────────────────────────────────────────
 
@@ -112,7 +117,7 @@ function persistEntriesCount(execution: PipelineExecution): void {
 
 // ── Session-mine handler ──────────────────────────────────────────────
 
-async function handleSessionMine(job: Job): Promise<JobResult> {
+async function handleSessionMine(job: Job, ctx: HandlerContext): Promise<JobResult> {
   if (job.type !== "session-mine") throw new Error("Expected session-mine job");
 
   const execution = await executePipeline(sessionMinePipeline, {
@@ -120,8 +125,9 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
     transcriptPath: job.transcriptPath,
     sessionId: job.sessionId,
   }, {
-    jobId: "",
+    jobId: ctx.jobId,
     project: projectFromPath(job.cwd),
+    signal: ctx.signal,
     ...buildPipelineCallbacks("session-mine"),
   });
 
@@ -134,7 +140,7 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
 
 // ── Git change handler ───────────────────────────────────────────────
 
-async function handleGitChange(job: Job): Promise<JobResult> {
+async function handleGitChange(job: Job, ctx: HandlerContext): Promise<JobResult> {
   if (job.type !== "git-push" && job.type !== "git-pull") throw new Error("Expected git job");
 
   const pipeline = job.type === "git-push" ? gitPushPipeline : gitPullPipeline;
@@ -148,8 +154,9 @@ async function handleGitChange(job: Job): Promise<JobResult> {
     trigger,
     refs: job.type === "git-push" ? job.refs : undefined,
   }, {
-    jobId: "",
+    jobId: ctx.jobId,
     project: projectFromPath(job.repoPath),
+    signal: ctx.signal,
     ...buildPipelineCallbacks(job.type),
   });
 
@@ -160,14 +167,15 @@ async function handleGitChange(job: Job): Promise<JobResult> {
 
 // ── Repo sync handler ────────────────────────────────────────────────
 
-async function handleRepoSync(job: Job): Promise<JobResult> {
+async function handleRepoSync(job: Job, ctx: HandlerContext): Promise<JobResult> {
   if (job.type !== "repo-sync") throw new Error("Expected repo-sync job");
 
   const execution = await executePipeline(repoSyncPipeline, {
     repoPath: job.repoPath,
   }, {
-    jobId: "",
+    jobId: ctx.jobId,
     project: projectFromPath(job.repoPath),
+    signal: ctx.signal,
     ...buildPipelineCallbacks("repo-sync"),
   });
 

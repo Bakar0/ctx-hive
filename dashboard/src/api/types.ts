@@ -31,7 +31,7 @@ export interface PipelineExecution {
   id: string;
   pipelineName: string;
   status: PipelineStatus;
-  jobFilename: string;
+  jobId: string;
   project: string;
   startedAt: string;
   completedAt?: string;

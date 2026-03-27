@@ -22,7 +22,7 @@ const HOOKS: HookDef[] = [
   {
     event: "UserPromptSubmit",
     command: "ctx-hive inject",
-    label: "UserPromptSubmit (context injection)",
+    label: "UserPromptSubmit (memory injection)",
   },
 ];
 

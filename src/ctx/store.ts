@@ -164,7 +164,7 @@ export function loadIndex(): IndexEntry[] {
 }
 
 /**
- * Loads full entries with bodies. Used by dashboard contexts endpoint.
+ * Loads full entries with bodies. Used by dashboard memories endpoint.
  */
 export function loadIndexEntries(): (IndexEntry & { body: string })[] {
   const db = getDb();

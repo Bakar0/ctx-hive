@@ -306,9 +306,9 @@ export async function gatherRepoContext(repoPath: string): Promise<RepoContext> 
   return { readme, claudeMd };
 }
 
-// ── Check existing context ─────────────────────────────────────────────
+// ── Check existing memories ─────────────────────────────────────────────
 
-export function checkExistingContext(
+export function checkExistingMemories(
   projectName: string,
   preloadedIndex?: IndexEntry[],
 ): IndexEntry[] {
@@ -341,7 +341,7 @@ function existingEntriesBlock(existing: IndexEntry[], isUpdate: boolean): string
   const lines = existing.map(
     (e) => `- [${e.scope}] ${e.title} (id: ${e.id}, tags: ${e.tags.join(",")})`,
   );
-  return `\n## Existing Context Entries (${existing.length})\n\n${lines.join("\n")}${
+  return `\n## Existing Memory Entries (${existing.length})\n\n${lines.join("\n")}${
     isUpdate
       ? "\n\nThis is an UPDATE run. Review existing entries above. Delete outdated ones and add/update as needed."
       : ""
@@ -355,7 +355,7 @@ function servedEntriesDedupBlock(servedEntries: ServedEntry[]): string {
     .map((e) => `- id: ${e.id} — "${e.title}"`)
     .join("\n");
 
-  return `## Previously-Served Context (do NOT duplicate)
+  return `## Previously-Served Memories (do NOT duplicate)
 
 The following entries were already served to this session. Do NOT create new entries that cover the same topics:
 ${entryList}
@@ -364,7 +364,7 @@ ${entryList}
 
 /**
  * Build a focused prompt for the Evaluator agent.
- * This agent only evaluates previously-served context entries — no mining.
+ * This agent only evaluates previously-served memory entries — no mining.
  */
 export function buildEvaluationPrompt(
   meta: RepoMeta,
@@ -376,9 +376,9 @@ export function buildEvaluationPrompt(
     .map((e) => `- id: ${e.id} — "${e.title}"`)
     .join("\n");
 
-  return `# Context Evaluator: ${meta.name}
+  return `# Memory Evaluator: ${meta.name}
 
-You are evaluating whether previously-served context entries were useful in a Claude Code session.
+You are evaluating whether previously-served memory entries were useful in a Claude Code session.
 
 ## Session files (JSONL format)
 
@@ -445,7 +445,7 @@ ${isUpdate ? "\nTo delete outdated entries:\n```\nctx-hive delete <id> --force\n
 
 /**
  * Build prompt for the Repo Analyzer agent.
- * Creates/updates the Project Overview entry + finds hidden context insights.
+ * Creates/updates the Project Overview entry + finds hidden memory insights.
  */
 export function buildRepoPrompt(
   meta: RepoMeta,
@@ -501,7 +501,7 @@ Leave this empty for a full scan — it will be maintained by incremental git ho
 
 ${overviewEntry ? `\nTo update: first delete the old entry, then create the new one:\n\`\`\`\nctx-hive delete ${overviewEntry.id} --force\n\`\`\`` : ""}
 
-### Task 2: Find Hidden Context Insights
+### Task 2: Find Hidden Memory Insights
 
 After creating the Project Overview, look for insights that **cannot be derived from reading the code**:
 - **Decision rationale** — WHY was this approach chosen over alternatives?
@@ -625,7 +625,7 @@ ${existingEntriesBlock(existing, isUpdate)}
 ${ctxAddInstructions(meta, isUpdate)}
 
 ${servedEntriesDedupBlock(servedEntries)}
-Now read the session files and generate context entries. Remember: only things an AI couldn't figure out by reading the code.`;
+Now read the session files and generate memory entries. Remember: only things an AI couldn't figure out by reading the code.`;
 }
 
 // ── Git change prompt ─────────────────────────────────────────────────
@@ -752,7 +752,7 @@ async function processRepo(
 
   // 3. Check existing context (load index once)
   const index = loadIndex();
-  const existing = checkExistingContext(meta.name, index);
+  const existing = checkExistingMemories(meta.name, index);
   const isUpdate = existing.length > 0;
   const overviewEntry = findProjectOverview(meta.name, index);
   if (verbose) console.log(`  Existing entries: ${existing.length} (${isUpdate ? "update" : "init"} mode), overview: ${overviewEntry ? overviewEntry.id : "none"}`);

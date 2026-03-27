@@ -1,7 +1,7 @@
 import type {
   MetricsSnapshot,
   JobView,
-  ContextEntry,
+  MemoryEntry,
   SignalsStore,
   DiscoveredRepo,
   SearchRecord,
@@ -50,23 +50,23 @@ export function requeueJob(filename: string): Promise<{ ok: boolean }> {
   return post(`/api/jobs/${encodeURIComponent(filename)}/requeue`);
 }
 
-// ── Contexts ─────────────────────────────────────────────────────────
+// ── Memories ─────────────────────────────────────────────────────────
 
-export function getContexts(params?: {
+export function getMemories(params?: {
   scope?: string;
   project?: string;
   sortBy?: "time" | "project";
-}): Promise<ContextEntry[]> {
+}): Promise<MemoryEntry[]> {
   const sp = new URLSearchParams();
   if (params?.scope != null && params.scope !== "") sp.set("scope", params.scope);
   if (params?.project != null && params.project !== "") sp.set("project", params.project);
   if (params?.sortBy != null && params.sortBy !== "") sp.set("sortBy", params.sortBy);
   const qs = sp.toString();
-  return get(`/api/contexts${qs !== "" ? `?${qs}` : ""}`);
+  return get(`/api/memories${qs !== "" ? `?${qs}` : ""}`);
 }
 
-export function deleteContext(id: string): Promise<{ ok: boolean }> {
-  return del(`/api/contexts/${encodeURIComponent(id)}`);
+export function deleteMemory(id: string): Promise<{ ok: boolean }> {
+  return del(`/api/memories/${encodeURIComponent(id)}`);
 }
 
 export function getProjects(): Promise<string[]> {

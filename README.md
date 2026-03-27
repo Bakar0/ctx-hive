@@ -3,9 +3,9 @@
 [![CI](https://github.com/Bakar0/ctx-hive/actions/workflows/ci.yml/badge.svg)](https://github.com/Bakar0/ctx-hive/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Persistent context store for Claude Code sessions.
+Persistent memory store for Claude Code sessions.
 
-ctx-hive lets you save, search, and reuse organizational knowledge, project context, architectural decisions, and personal notes across Claude Code sessions. It acts as institutional memory — so you never lose the "why" behind code patterns, conventions, and past decisions.
+ctx-hive lets you save, search, and reuse organizational knowledge, project memories, architectural decisions, and personal notes across Claude Code sessions. It acts as institutional memory — so you never lose the "why" behind code patterns, conventions, and past decisions.
 
 ## Prerequisites
 
@@ -70,12 +70,12 @@ ctx-hive <command> [options]
 
 Commands:
   search <query>         Search entries by keyword
-  add                    Create a new context entry
+  add                    Create a new memory entry
   list                   List all entries
   show <id>              Display a full entry
   edit <id>              Open an entry in $EDITOR
   delete <id>            Remove an entry
-  init [path]            Scan repos and mine Claude sessions for context
+  init [path]            Scan repos and mine Claude sessions for memories
   update [path]          Update existing entries (alias for init)
   evaluate               Record a relevance evaluation for an entry
   rebuild-index          Regenerate the search index
@@ -110,7 +110,7 @@ Scans your directory tree for git repos, lets you select which ones to analyze, 
 1. **Analyze the repo** — explores code structure, extracts architecture decisions and patterns
 2. **Mine Claude sessions** — parses past session history for insights and discussions
 
-Results are saved as searchable context entries.
+Results are saved as searchable memory entries.
 
 ### Daemon & Dashboard
 
@@ -150,7 +150,7 @@ Git hooks are fire-and-forget — they never block git operations.
 
 | Scope | Purpose |
 |-------|---------|
-| **project** | Context specific to a single repo |
+| **project** | Memories specific to a single repo |
 | **org** | Shared knowledge across an organization |
 | **personal** | Personal notes and preferences |
 
@@ -169,7 +169,7 @@ src/
 ├── db/         SQLite database — connection, migrations, FTS5 search index
 ├── git/        Git subprocess execution
 ├── hooks/      Git & session hooks — enqueue, installers, hook scripts
-├── inject/     UserPromptSubmit hook — searches context and injects into Claude prompts
+├── inject/     UserPromptSubmit hook — searches memories and injects into Claude prompts
 ├── pipeline/   Pipeline execution — stage definitions, executor, message passing
 ├── repo/       Repo scanning & tracking
 ├── skills/     Claude Code skill definition & installer
@@ -186,9 +186,9 @@ src/
 - **Pipeline** (`src/pipeline/`) — Execution engine with serial/parallel stages, retries, abort signals
 - **Daemon** (`src/daemon/serve.ts`) — Background job processor with HTTP dashboard
 - **Jobs** (`src/daemon/jobs.ts`) — SQLite-backed job queue with zod-validated schemas
-- **Inject** (`src/inject/hook.ts`) — UserPromptSubmit hook for context injection into Claude prompts
+- **Inject** (`src/inject/hook.ts`) — UserPromptSubmit hook for memory injection into Claude prompts
 - **Hooks** (`src/hooks/`) — SessionEnd hook and global git hook installers
-- **Repo tracking** (`src/repo/tracking.ts`) — Track/untrack repos for context generation
+- **Repo tracking** (`src/repo/tracking.ts`) — Track/untrack repos for memory generation
 
 ## Development
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import Sidebar from "./components/Sidebar.svelte";
   import Pipeline from "./pages/Pipeline.svelte";
-  import Contexts from "./pages/Contexts.svelte";
+  import Memories from "./pages/Memories.svelte";
   import Repos from "./pages/Repos.svelte";
   import Search from "./pages/Search.svelte";
   import { DashboardSocket } from "./state/socket.svelte.ts";
@@ -12,7 +12,7 @@
   let projects = $state<string[]>([]);
 
   let pipelineRef = $state<Pipeline>();
-  let contextsRef = $state<Contexts>();
+  let memoriesRef = $state<Memories>();
   let reposRef = $state<Repos>();
   let searchRef = $state<Search>();
 
@@ -28,8 +28,8 @@
     socket.on("pipeline:stage-changed", () => { if (page === "pipeline") pipelineRef?.fetchPipelines(); });
     socket.on("pipeline:completed", () => { if (page === "pipeline") pipelineRef?.fetchPipelines(); });
     socket.on("pipeline:failed", () => { if (page === "pipeline") pipelineRef?.fetchPipelines(); });
-    socket.on("context:created", () => { if (page === "contexts") contextsRef?.fetchContexts(); });
-    socket.on("context:deleted", () => { if (page === "contexts") contextsRef?.fetchContexts(); });
+    socket.on("memory:created", () => { if (page === "memories") memoriesRef?.fetchMemories(); });
+    socket.on("memory:deleted", () => { if (page === "memories") memoriesRef?.fetchMemories(); });
     socket.on("repo:tracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
     socket.on("repo:untracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
     socket.on("repo:scan-complete", () => { if (page === "repos") reposRef?.fetchRepos(); });
@@ -58,8 +58,8 @@
   <main class="flex-1 overflow-y-auto p-6 px-8">
     {#if page === "pipeline"}
       <Pipeline bind:this={pipelineRef} {projects} />
-    {:else if page === "contexts"}
-      <Contexts bind:this={contextsRef} {projects} />
+    {:else if page === "memories"}
+      <Memories bind:this={memoriesRef} {projects} />
     {:else if page === "repos"}
       <Repos bind:this={reposRef} />
     {:else if page === "search"}

@@ -5,7 +5,7 @@ export type JobStatus = "pending" | "processing" | "done" | "failed";
 export type Scope = "project" | "org" | "personal";
 export type SearchSource = "inject" | "cli" | "api";
 export type StageStatus = "pending" | "running" | "completed" | "failed" | "skipped";
-export type PipelineStatus = "pending" | "running" | "completed" | "failed";
+export type PipelineStatus = "pending" | "running" | "completed" | "failed" | "requeued";
 
 // ── Pipeline types ───────────────────────────────────────────────────
 
@@ -31,7 +31,7 @@ export interface PipelineExecution {
   id: string;
   pipelineName: string;
   status: PipelineStatus;
-  jobFilename: string;
+  jobId: string;
   project: string;
   startedAt: string;
   completedAt?: string;

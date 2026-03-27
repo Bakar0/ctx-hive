@@ -66,6 +66,15 @@ async function runStage(
     return input; // pass through
   }
 
+  // Bail early if already cancelled
+  if (options.signal?.aborted === true) {
+    stageExec.status = "skipped";
+    stageExec.completedAt = new Date().toISOString();
+    options.onStageChange?.(stageExec);
+    writeManifest(execution.id, execution);
+    throw new DOMException("Pipeline cancelled", "AbortError");
+  }
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     stageExec.status = "running";
     stageExec.startedAt = new Date().toISOString();
@@ -163,6 +172,10 @@ export async function executePipeline(
 
   try {
     for (const step of def.steps) {
+      if (options.signal?.aborted === true) {
+        throw new DOMException("Pipeline cancelled", "AbortError");
+      }
+
       if (step.type === "serial") {
         const stageExec = execution.stages.find((s) => s.name === step.stage.name);
         if (stageExec === undefined) throw new Error(`Stage ${step.stage.name} not found in execution`);
@@ -206,7 +219,17 @@ export async function executePipeline(
     writeManifest(executionId, execution);
     return execution;
   } catch (err) {
-    // Pipeline failed
+    // Mark remaining pending stages as skipped on cancellation
+    const isCancelled = err instanceof DOMException && err.name === "AbortError";
+    if (isCancelled) {
+      for (const s of execution.stages) {
+        if (s.status === "pending") {
+          s.status = "skipped";
+          s.completedAt = new Date().toISOString();
+        }
+      }
+    }
+
     execution.status = "failed";
     execution.completedAt = new Date().toISOString();
     execution.totalDurationMs = Date.now() - pipelineStart;

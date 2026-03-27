@@ -75,6 +75,15 @@ async function releasePidLock(): Promise<void> {
 
 let maxConcurrency = 3;
 const inFlightJobs = new Set<Promise<void>>();
+const inFlightControllers = new Map<string, AbortController>();
+
+/** Abort an in-flight job by signalling its AbortController. */
+export function abortJob(jobId: string): boolean {
+  const controller = inFlightControllers.get(jobId);
+  if (controller === undefined) return false;
+  controller.abort();
+  return true;
+}
 
 async function processJob(jobId: string): Promise<void> {
   let job;
@@ -85,6 +94,9 @@ async function processJob(jobId: string): Promise<void> {
     try { failJob(jobId, "malformed job file"); } catch { /* already handled */ }
     return;
   }
+
+  const controller = new AbortController();
+  inFlightControllers.set(jobId, controller);
 
   try {
     const handler = getHandler(job.type);
@@ -128,7 +140,7 @@ async function processJob(jobId: string): Promise<void> {
     log("info", `processing: ${job.type} (${jobId})`);
     broadcastJobEvent("job:started", job);
 
-    const result = await handler(job);
+    const result = await handler(job, { jobId, signal: controller.signal });
     if (result.success) {
       completeJob(jobId, result);
       log("info", `completed: ${job.type} (${(result.durationMs / 1000).toFixed(1)}s)`);
@@ -143,6 +155,8 @@ async function processJob(jobId: string): Promise<void> {
     log("error", `job processing error for ${job.type} (${jobId}): ${msg}`);
     try { failJob(jobId, msg); } catch { /* best-effort */ }
     broadcastJobEvent("job:failed", job);
+  } finally {
+    inFlightControllers.delete(jobId);
   }
 }
 
@@ -193,10 +207,26 @@ export function triggerDrain(): void {
 function recoverOrphans(): void {
   const db = getDb();
   // Reset any jobs stuck in 'processing' back to 'pending'
-  const result = db.prepare("UPDATE jobs SET status = 'pending', started_at = NULL WHERE status = 'processing'").run();
-  if (result.changes > 0) {
-    log("warn", `recovered ${result.changes} orphaned job(s) from processing`);
+  const jobResult = db.prepare("UPDATE jobs SET status = 'pending', started_at = NULL WHERE status = 'processing'").run();
+  if (jobResult.changes > 0) {
+    log("warn", `recovered ${jobResult.changes} orphaned job(s) from processing`);
   }
+
+  // Fail any pipeline stages/executions stuck in 'running' (from a prior daemon crash)
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE pipeline_stages SET status = 'failed', error = 'daemon restarted'
+       WHERE status = 'running'
+         AND execution_id IN (SELECT id FROM pipeline_executions WHERE status = 'running')`,
+    ).run();
+    const pipelineResult = db.prepare(
+      "UPDATE pipeline_executions SET status = 'failed', completed_at = ? WHERE status = 'running'",
+    ).run(now);
+    if (pipelineResult.changes > 0) {
+      log("warn", `recovered ${pipelineResult.changes} orphaned pipeline(s) from running`);
+    }
+  })();
 }
 
 // ── Dashboard HTML (embedded at build time) ──────────────────────────

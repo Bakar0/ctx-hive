@@ -35,8 +35,8 @@ import {
   discoverRepos,
   enrichTrackedRepos,
 } from "../repo/scanner.ts";
-import { broadcastRepoEvent, markMetricsDirty } from "./ws.ts";
-import { triggerDrain } from "./serve.ts";
+import { broadcastRepoEvent, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
+import { triggerDrain, abortJob } from "./serve.ts";
 import { errorMessage } from "../git/run.ts";
 import { listExecutions, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
 import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
@@ -116,6 +116,21 @@ function projectFromCwd(cwd?: string): string {
 
 const RepoBodySchema = z.object({ absPath: z.string().min(1) });
 const RepoOpenBodySchema = z.object({ absPath: z.string().min(1), target: z.string().optional() });
+
+interface JobIdRow { job_id: string }
+
+/** Resolve a pipeline execution ID to its owning job ID. */
+function findJobIdForExecution(executionId: string): string | undefined {
+  const db = getDb();
+  const row = db.prepare<JobIdRow, [string]>("SELECT job_id FROM pipeline_executions WHERE id = ?").get(executionId);
+  if (row == null) return undefined;
+  if (row.job_id !== "") return row.job_id;
+  // Fallback: find via pipeline_data JSON containing the execution id (any status)
+  const jobRow = db.prepare<JobIdRow, [string]>("SELECT job_id FROM jobs WHERE pipeline_data LIKE ? LIMIT 1").get(`%${executionId}%`);
+  if (jobRow != null) return jobRow.job_id;
+  return undefined;
+}
+
 
 // ── API Functions ─────────────────────────────────────────────────────
 
@@ -404,6 +419,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       "UPDATE jobs SET status = 'failed', error = 'manually cancelled', failed_at = ? WHERE job_id = ? AND status IN ('processing', 'pending')",
     ).run(new Date().toISOString(), jobId);
     if (result.changes === 0) return json({ error: "Job not found or not in cancellable state" }, 404);
+    abortJob(jobId);
+    broadcastJobEvent("job:failed", { jobId });
+    markMetricsDirty();
     return json({ ok: true });
   }
 
@@ -699,6 +717,40 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     } catch {
       return json({ error: "Not found" }, 404);
     }
+  }
+
+  // POST /api/pipelines/:executionId/cancel
+  const pipelineCancelMatch = /^\/api\/pipelines\/([^/]+)\/cancel$/.exec(path);
+  if (pipelineCancelMatch && req.method === "POST") {
+    const executionId = decodeURIComponent(pipelineCancelMatch[1]!);
+    const jobId = findJobIdForExecution(executionId);
+    if (jobId === undefined) return json({ error: "Pipeline or linked job not found" }, 404);
+    const db = getDb();
+    const result = db.prepare(
+      "UPDATE jobs SET status = 'failed', error = 'manually cancelled', failed_at = ? WHERE job_id = ? AND status IN ('processing', 'pending')",
+    ).run(new Date().toISOString(), jobId);
+    if (result.changes === 0) return json({ error: "Job not in cancellable state" }, 404);
+    abortJob(jobId);
+    broadcastJobEvent("job:failed", { jobId });
+    markMetricsDirty();
+    return json({ ok: true });
+  }
+
+  // POST /api/pipelines/:executionId/rerun
+  const pipelineRerunMatch = /^\/api\/pipelines\/([^/]+)\/rerun$/.exec(path);
+  if (pipelineRerunMatch && req.method === "POST") {
+    const executionId = decodeURIComponent(pipelineRerunMatch[1]!);
+    const jobId = findJobIdForExecution(executionId);
+    if (jobId === undefined) return json({ error: "Pipeline or linked job not found" }, 404);
+    const db = getDb();
+    const result = db.prepare(
+      "UPDATE jobs SET status = 'pending', error = NULL, failed_at = NULL, started_at = NULL, completed_at = NULL, duration_ms = NULL, entries_created = NULL, input_tokens = NULL, output_tokens = NULL, transcript_tokens = NULL, pipeline_data = NULL WHERE job_id = ? AND status IN ('failed', 'done', 'processing')",
+    ).run(jobId);
+    if (result.changes === 0) return json({ error: "Job not found or not in retriable state" }, 404);
+    db.prepare("UPDATE pipeline_executions SET status = 'requeued' WHERE id = ?").run(executionId);
+    markMetricsDirty();
+    triggerDrain();
+    return json({ ok: true });
   }
 
   // GET /api/pipeline-stats

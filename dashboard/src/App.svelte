@@ -5,6 +5,7 @@
   import Repos from "./pages/Repos.svelte";
   import Search from "./pages/Search.svelte";
   import { DashboardSocket } from "./state/socket.svelte.ts";
+  import { repoStore } from "./state/repos.svelte.ts";
   import * as api from "./api/client";
 
   let page = $state(localStorage.getItem("ctx-hive-page") ?? "pipeline");
@@ -13,7 +14,6 @@
 
   let pipelineRef = $state<Pipeline>();
   let memoriesRef = $state<Memories>();
-  let reposRef = $state<Repos>();
   let searchRef = $state<Search>();
 
   $effect(() => {
@@ -30,9 +30,9 @@
     socket.on("pipeline:failed", () => { if (page === "pipeline") pipelineRef?.fetchPipelines(); });
     socket.on("memory:created", () => { if (page === "memories") memoriesRef?.fetchMemories(); });
     socket.on("memory:deleted", () => { if (page === "memories") memoriesRef?.fetchMemories(); });
-    socket.on("repo:tracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
-    socket.on("repo:untracked", () => { if (page === "repos") reposRef?.fetchRepos(); });
-    socket.on("repo:scan-complete", () => { if (page === "repos") reposRef?.fetchRepos(); });
+    socket.on("repo:tracked", () => { repoStore.refresh(); });
+    socket.on("repo:untracked", () => { repoStore.refresh(); });
+    socket.on("repo:scan-complete", () => { repoStore.refresh(); });
     socket.on("search:executed", () => { if (page === "search") searchRef?.fetchData(); });
 
     return () => socket.disconnect();
@@ -61,7 +61,7 @@
     {:else if page === "memories"}
       <Memories bind:this={memoriesRef} {projects} />
     {:else if page === "repos"}
-      <Repos bind:this={reposRef} />
+      <Repos />
     {:else if page === "search"}
       <Search bind:this={searchRef} />
     {/if}

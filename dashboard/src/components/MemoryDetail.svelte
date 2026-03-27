@@ -122,10 +122,11 @@
           >Raw</button>
         </div>
       </div>
-      <div class="grid [&>*]:col-start-1 [&>*]:row-start-1">
-        <div class="{viewMode !== 'raw' ? 'invisible' : ''} text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words bg-background rounded-md p-4 border">{memory.body}</div>
-        <div class="{viewMode !== 'preview' ? 'invisible' : ''} text-sm bg-background rounded-md p-4 border prose prose-invert prose-sm max-w-none">{@html renderedHtml}</div>
-      </div>
+      {#if viewMode === "raw"}
+        <div class="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words bg-background rounded-md p-4 border">{memory.body}</div>
+      {:else}
+        <div class="text-sm bg-background rounded-md p-4 border prose prose-invert prose-sm max-w-none">{@html renderedHtml}</div>
+      {/if}
 
       {#if signals}
         <div class="mt-4 p-4 bg-background border rounded-md">

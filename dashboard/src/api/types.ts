@@ -166,8 +166,10 @@ export interface SearchRecord {
   cwd?: string;
   sessionId?: string;
   resultCount: number;
-  results: { id: string; title: string; score: number; tokens?: number }[];
+  results: { id: string; title: string; score: number; tokens?: number; algorithm?: string }[];
   durationMs: number;
+  ftsDurationMs?: number;
+  vectorDurationMs?: number;
 }
 
 export interface SearchStats {
@@ -177,6 +179,55 @@ export interface SearchStats {
   avgResultCount: number;
   topServedEntries: { id: string; title: string; count: number }[];
   avgScoreOfServed: number;
+}
+
+// ── Multi-algorithm search types ────────────────────────────────────
+
+export type Algorithm = "fts5" | "vector";
+
+export interface SearchResultEntry {
+  id: string;
+  title: string;
+  scope: Scope;
+  tags: string[];
+  project: string;
+  score: number;
+  excerpt: string;
+  tokens: number;
+  path: string;
+  created: string;
+  updated: string;
+  algorithms?: Algorithm[];
+}
+
+export interface AlgorithmResult {
+  algorithm: Algorithm;
+  results: SearchResultEntry[];
+  durationMs: number;
+}
+
+export interface MultiSearchResponse {
+  query: string;
+  merged: SearchResultEntry[];
+  algorithms: AlgorithmResult[];
+  mergeStrategy: "fts5-only" | "rrf";
+}
+
+// ── Vector search settings types ────────────────────────────────────
+
+export interface VectorSearchSettings {
+  enabled: boolean;
+  model: string;
+  hasApiKey: boolean;
+  embeddedCount: number;
+  totalCount: number;
+}
+
+export interface BackfillStatus {
+  inProgress: boolean;
+  done: number;
+  total: number;
+  failed: number;
 }
 
 // ── Session types ────────────────────────────────────────────────────
@@ -222,4 +273,5 @@ export type WsEvent =
   | "pipeline:started"
   | "pipeline:stage-changed"
   | "pipeline:completed"
-  | "pipeline:failed";
+  | "pipeline:failed"
+  | "search:executed";

@@ -76,13 +76,13 @@ async function releasePidLock(): Promise<void> {
 let maxConcurrency = 3;
 const inFlightJobs = new Set<Promise<void>>();
 
-async function processJob(filename: string): Promise<void> {
+async function processJob(jobId: string): Promise<void> {
   let job;
   try {
-    job = readJob(filename);
+    job = readJob(jobId);
   } catch (err) {
-    log("error", `failed to read job ${filename}: ${errorMessage(err)}`);
-    try { failJob(filename, "malformed job file"); } catch { /* already handled */ }
+    log("error", `failed to read job ${jobId}: ${errorMessage(err)}`);
+    try { failJob(jobId, "malformed job file"); } catch { /* already handled */ }
     return;
   }
 
@@ -90,7 +90,7 @@ async function processJob(filename: string): Promise<void> {
     const handler = getHandler(job.type);
     if (!handler) {
       log("error", `no handler for job type: ${job.type}`);
-      failJob(filename, `unknown job type: ${job.type}`);
+      failJob(jobId, `unknown job type: ${job.type}`);
       return;
     }
 
@@ -100,7 +100,7 @@ async function processJob(filename: string): Promise<void> {
       const trackedRepos = loadTrackedRepos();
       if (!findTrackedRepoFor(repoPath, trackedRepos)) {
         log("info", `skipping job for untracked repo: ${repoPath}`);
-        completeJob(filename, { success: true, durationMs: 0 });
+        completeJob(jobId, { success: true, durationMs: 0 });
         return;
       }
     }
@@ -109,7 +109,7 @@ async function processJob(filename: string): Promise<void> {
     if (job.type === "session-mine") {
       if (isDuplicate(job.sessionId)) {
         log("info", `skipping duplicate session: ${job.sessionId.slice(0, 8)}`);
-        completeJob(filename, { success: true, durationMs: 0 });
+        completeJob(jobId, { success: true, durationMs: 0 });
         return;
       }
     }
@@ -118,30 +118,30 @@ async function processJob(filename: string): Promise<void> {
     if (job.type === "git-push" || job.type === "git-pull") {
       if (job.headSha !== "" && isGitJobProcessed(job.headSha, job.repoPath)) {
         log("info", `skipping already-processed commit: ${job.headSha.slice(0, 8)} in ${job.repoPath}`);
-        completeJob(filename, { success: true, durationMs: 0 });
+        completeJob(jobId, { success: true, durationMs: 0 });
         return;
       }
     }
 
     // Mark as processing
-    stampStarted(filename);
-    log("info", `processing: ${job.type} (${filename})`);
+    stampStarted(jobId);
+    log("info", `processing: ${job.type} (${jobId})`);
     broadcastJobEvent("job:started", job);
 
     const result = await handler(job);
     if (result.success) {
-      completeJob(filename, result);
+      completeJob(jobId, result);
       log("info", `completed: ${job.type} (${(result.durationMs / 1000).toFixed(1)}s)`);
       broadcastJobEvent("job:completed", job);
     } else {
-      failJob(filename, result.error ?? "unknown error");
+      failJob(jobId, result.error ?? "unknown error");
       log("error", `failed: ${job.type} — ${result.error}`);
       broadcastJobEvent("job:failed", job);
     }
   } catch (err) {
     const msg = errorMessage(err);
-    log("error", `job processing error for ${job.type} (${filename}): ${msg}`);
-    try { failJob(filename, msg); } catch { /* best-effort */ }
+    log("error", `job processing error for ${job.type} (${jobId}): ${msg}`);
+    try { failJob(jobId, msg); } catch { /* best-effort */ }
     broadcastJobEvent("job:failed", job);
   }
 }
@@ -153,15 +153,15 @@ async function drainPending(): Promise<void> {
   draining = true;
 
   try {
-    const filenames = listJobs("pending");
-    for (const filename of filenames) {
+    const jobIds = listJobs("pending");
+    for (const jobId of jobIds) {
       if (shuttingDown) break;
       if (inFlightJobs.size >= maxConcurrency) {
         await Promise.race(inFlightJobs);
       }
       if (shuttingDown) break;
 
-      const jobPromise = processJob(filename)
+      const jobPromise = processJob(jobId)
         .catch((err) => {
           log("error", `unexpected job error: ${errorMessage(err)}`);
         })

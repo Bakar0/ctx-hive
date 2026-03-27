@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@anthropic-ai/tokenizer": "^0.0.4",
+    "sqlite-vec": "^0.1.7",
     "zod": "^4.3.6"
   }
 }

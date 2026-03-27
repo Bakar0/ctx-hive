@@ -72,7 +72,7 @@ export function writeManifest(executionId: string, exec: PipelineExecution): voi
   const tx = db.transaction(() => {
     // Upsert execution
     db.prepare(`
-      INSERT INTO pipeline_executions (id, pipeline_name, status, job_filename, project, started_at, completed_at,
+      INSERT INTO pipeline_executions (id, pipeline_name, status, job_id, project, started_at, completed_at,
         total_duration_ms, total_input_tokens, total_output_tokens, total_cost_usd, entries_created)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
@@ -80,7 +80,7 @@ export function writeManifest(executionId: string, exec: PipelineExecution): voi
         total_duration_ms = excluded.total_duration_ms, total_input_tokens = excluded.total_input_tokens,
         total_output_tokens = excluded.total_output_tokens, total_cost_usd = excluded.total_cost_usd,
         entries_created = excluded.entries_created
-    `).run(exec.id, exec.pipelineName, exec.status, exec.jobFilename, exec.project,
+    `).run(exec.id, exec.pipelineName, exec.status, exec.jobId, exec.project,
       exec.startedAt, exec.completedAt ?? null, exec.totalDurationMs ?? null,
       exec.totalInputTokens ?? null, exec.totalOutputTokens ?? null,
       exec.totalCostUsd ?? null, exec.entriesCreated ?? null);
@@ -101,7 +101,7 @@ export function writeManifest(executionId: string, exec: PipelineExecution): voi
 }
 
 interface ExecutionRow {
-  id: string; pipeline_name: string; status: string; job_filename: string; project: string;
+  id: string; pipeline_name: string; status: string; job_id: string; project: string;
   started_at: string; completed_at: string | null;
   total_duration_ms: number | null; total_input_tokens: number | null;
   total_output_tokens: number | null; total_cost_usd: number | null; entries_created: number | null;
@@ -131,7 +131,7 @@ export function readManifest(executionId: string): unknown {
     id: exec.id,
     pipelineName: exec.pipeline_name,
     status: exec.status,
-    jobFilename: exec.job_filename,
+    jobId: exec.job_id,
     project: exec.project,
     startedAt: exec.started_at,
     completedAt: exec.completed_at ?? undefined,
@@ -214,7 +214,7 @@ export function listExecutions(opts?: {
       id: exec.id,
       pipelineName: exec.pipeline_name,
       status: exec.status,
-      jobFilename: exec.job_filename,
+      jobId: exec.job_id,
       project: exec.project,
       startedAt: exec.started_at,
       completedAt: exec.completed_at ?? undefined,

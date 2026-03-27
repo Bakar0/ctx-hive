@@ -116,7 +116,7 @@ async function seedEntries(db: Database): Promise<number> {
 // ── Jobs ──────────────────────────────────────────────────────────────
 
 interface SeedJobRow {
-  filename: string; type: string; status: string; payload: string;
+  jobId: string; type: string; status: string; payload: string;
   error: string | null; createdAt: string; startedAt: string | null;
   completedAt: string | null; failedAt: string | null;
   durationMs: number | null; transcriptTokens: number | null;
@@ -145,7 +145,7 @@ async function seedJobs(db: Database): Promise<number> {
         const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
         const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
         rows.push({
-          filename: file,
+          jobId: file,
           type: typeof data.type === "string" ? data.type : "unknown",
           status,
           payload: raw,
@@ -170,13 +170,13 @@ async function seedJobs(db: Database): Promise<number> {
   if (rows.length === 0) return 0;
 
   const insert = db.prepare(`
-    INSERT OR IGNORE INTO jobs (filename, type, status, payload, error, created_at, started_at, completed_at, failed_at,
+    INSERT OR IGNORE INTO jobs (job_id, type, status, payload, error, created_at, started_at, completed_at, failed_at,
       duration_ms, transcript_tokens, entries_created, input_tokens, output_tokens, pipeline_data)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = db.transaction(() => {
     for (const r of rows) {
-      insert.run(r.filename, r.type, r.status, r.payload, r.error, r.createdAt, r.startedAt, r.completedAt, r.failedAt,
+      insert.run(r.jobId, r.type, r.status, r.payload, r.error, r.createdAt, r.startedAt, r.completedAt, r.failedAt,
         r.durationMs, r.transcriptTokens, r.entriesCreated, r.inputTokens, r.outputTokens, r.pipelineData);
     }
   });
@@ -335,7 +335,7 @@ async function seedPipelines(db: Database): Promise<number> {
 
   const insertExec = db.prepare(`
     INSERT OR IGNORE INTO pipeline_executions
-      (id, pipeline_name, status, job_filename, project, started_at, completed_at,
+      (id, pipeline_name, status, job_id, project, started_at, completed_at,
        total_duration_ms, total_input_tokens, total_output_tokens, total_cost_usd, entries_created)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -358,7 +358,7 @@ async function seedPipelines(db: Database): Promise<number> {
       const exec = PipelineExecutionSchema.parse(JSON.parse(await manifestFile.text()));
 
       const execTx = db.transaction(() => {
-        insertExec.run(exec.id, exec.pipelineName, exec.status, exec.jobFilename, exec.project,
+        insertExec.run(exec.id, exec.pipelineName, exec.status, exec.jobId, exec.project,
           exec.startedAt, exec.completedAt ?? null, exec.totalDurationMs ?? null,
           exec.totalInputTokens ?? null, exec.totalOutputTokens ?? null,
           exec.totalCostUsd ?? null, exec.entriesCreated ?? null);

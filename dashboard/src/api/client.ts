@@ -10,6 +10,9 @@ import type {
   TrackedRepo,
   PipelineExecution,
   PipelineStats,
+  MultiSearchResponse,
+  VectorSearchSettings,
+  BackfillStatus,
 } from "./types";
 
 const BASE = "";
@@ -91,6 +94,47 @@ export function getSearchHistory(params?: {
 
 export function getSearchStats(): Promise<SearchStats> {
   return get("/api/search-stats");
+}
+
+export function searchEntries(params: {
+  q: string;
+  scope?: string;
+  project?: string;
+  tags?: string;
+  limit?: number;
+  mode?: "merged" | "full";
+}): Promise<MultiSearchResponse> {
+  const sp = new URLSearchParams();
+  sp.set("q", params.q);
+  sp.set("mode", params.mode ?? "full");
+  sp.set("source", "api");
+  if (params.scope != null && params.scope !== "") sp.set("scope", params.scope);
+  if (params.project != null && params.project !== "") sp.set("project", params.project);
+  if (params.tags != null && params.tags !== "") sp.set("tags", params.tags);
+  if (params.limit != null) sp.set("limit", String(params.limit));
+  return get(`/api/search?${sp.toString()}`);
+}
+
+// ── Vector search settings ──────────────────────────────────────────
+
+export function getVectorSearchSettings(): Promise<VectorSearchSettings> {
+  return get("/api/settings/vector-search");
+}
+
+export function updateVectorSearchSettings(settings: {
+  enabled?: boolean;
+  apiKey?: string;
+  model?: string;
+}): Promise<{ ok: boolean; backfillStarted?: boolean; error?: string }> {
+  return post("/api/settings/vector-search", settings);
+}
+
+export function triggerBackfill(): Promise<{ ok: boolean }> {
+  return post("/api/settings/vector-search/backfill");
+}
+
+export function getBackfillStatus(): Promise<BackfillStatus> {
+  return get("/api/settings/vector-search/status");
 }
 
 // ── Sessions ────────────────────────────────────────────────────────

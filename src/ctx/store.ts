@@ -3,6 +3,9 @@ import { homedir } from "node:os";
 import { z } from "zod";
 import { countTokens } from "@anthropic-ai/tokenizer";
 import { getDb } from "../db/connection.ts";
+import { isVectorSearchEnabled, getVectorSearchConfig } from "./settings.ts";
+import { generateEmbedding } from "./embeddings.ts";
+import { syncEntryEmbedding } from "./vector-search.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -122,6 +125,17 @@ export function writeEntry(meta: EntryMeta, body: string): string {
       tags = excluded.tags, project = excluded.project, body = excluded.body,
       tokens = excluded.tokens, updated_at = excluded.updated_at
   `).run(meta.id, meta.title, slug, meta.scope, tags, meta.project, body, tokens, meta.created || now, now);
+
+  // Fire-and-forget: generate and store embedding when vector search is enabled
+  if (isVectorSearchEnabled()) {
+    const config = getVectorSearchConfig();
+    if (config.apiKey !== null) {
+      const text = `${meta.title}\n${body}`;
+      generateEmbedding(text, config.apiKey, config.model)
+        .then((embedding) => syncEntryEmbedding(meta.id, embedding))
+        .catch((err) => console.error(`[embeddings] Failed for ${meta.id}:`, err));
+    }
+  }
 
   return slug;
 }

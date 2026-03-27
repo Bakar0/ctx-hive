@@ -11,8 +11,8 @@ export async function backfillTranscriptTokens(): Promise<void> {
   let failed = 0;
 
   const db = getDb();
-  const rows = db.prepare<{ filename: string; payload: string }, [string]>(
-    "SELECT filename, payload FROM jobs WHERE status IN ('done', 'failed') AND type = ?",
+  const rows = db.prepare<{ job_id: string; payload: string }, [string]>(
+    "SELECT job_id, payload FROM jobs WHERE status IN ('done', 'failed') AND type = ?",
   ).all("session-mine");
 
   for (const row of rows) {
@@ -32,12 +32,12 @@ export async function backfillTranscriptTokens(): Promise<void> {
         continue;
       }
 
-      db.prepare("UPDATE jobs SET transcript_tokens = ? WHERE filename = ?")
-        .run(tokens, row.filename);
-      console.log(`${row.filename}: → ${tokens}`);
+      db.prepare("UPDATE jobs SET transcript_tokens = ? WHERE job_id = ?")
+        .run(tokens, row.job_id);
+      console.log(`${row.job_id}: → ${tokens}`);
       updated++;
     } catch {
-      console.error(`Failed: ${row.filename}`);
+      console.error(`Failed: ${row.job_id}`);
       failed++;
     }
   }

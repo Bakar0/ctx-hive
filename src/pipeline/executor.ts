@@ -145,7 +145,7 @@ export async function executePipeline(
     id: executionId,
     pipelineName: def.name,
     status: "running",
-    jobFilename: options.jobFilename,
+    jobId: options.jobId,
     project: options.project,
     startedAt: new Date().toISOString(),
     stages: allStageNames.map(newStageExecution),

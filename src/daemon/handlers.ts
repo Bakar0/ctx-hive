@@ -120,7 +120,7 @@ async function handleSessionMine(job: Job): Promise<JobResult> {
     transcriptPath: job.transcriptPath,
     sessionId: job.sessionId,
   }, {
-    jobFilename: "",
+    jobId: "",
     project: projectFromPath(job.cwd),
     ...buildPipelineCallbacks("session-mine"),
   });
@@ -148,7 +148,7 @@ async function handleGitChange(job: Job): Promise<JobResult> {
     trigger,
     refs: job.type === "git-push" ? job.refs : undefined,
   }, {
-    jobFilename: "",
+    jobId: "",
     project: projectFromPath(job.repoPath),
     ...buildPipelineCallbacks(job.type),
   });
@@ -166,7 +166,7 @@ async function handleRepoSync(job: Job): Promise<JobResult> {
   const execution = await executePipeline(repoSyncPipeline, {
     repoPath: job.repoPath,
   }, {
-    jobFilename: "",
+    jobId: "",
     project: projectFromPath(job.repoPath),
     ...buildPipelineCallbacks("repo-sync"),
   });

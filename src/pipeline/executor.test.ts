@@ -52,7 +52,7 @@ describe("executePipeline", () => {
     };
 
     const execution = await executePipeline(pipeline, { initial: true }, {
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test",
     });
 
@@ -94,7 +94,7 @@ describe("executePipeline", () => {
     };
 
     const execution = await executePipeline(pipeline, {}, {
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test",
     });
 
@@ -118,7 +118,7 @@ describe("executePipeline", () => {
     };
 
     const execution = await executePipeline(pipeline, { skip: true }, {
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test",
     });
 
@@ -148,7 +148,7 @@ describe("executePipeline", () => {
     };
 
     const execution = await executePipeline(pipeline, {}, {
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test",
     });
 
@@ -174,7 +174,7 @@ describe("executePipeline", () => {
 
     try {
       const execution = await executePipeline(pipeline, {}, {
-        jobFilename: "test.json",
+        jobId: "test",
         project: "test",
       });
       createdExecutions.push(execution.id);
@@ -207,7 +207,7 @@ describe("executePipeline", () => {
     };
 
     const execution = await executePipeline(pipeline, {}, {
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test",
       onStageChange: (s) => changes.push({ ...s }),
     });
@@ -231,7 +231,7 @@ describe("executePipeline", () => {
     };
 
     const execution = await executePipeline(pipeline, { seed: 1 }, {
-      jobFilename: "test.json",
+      jobId: "test",
       project: "test",
     });
 

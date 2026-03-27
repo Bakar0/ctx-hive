@@ -2,15 +2,15 @@
   import type { StageExecution } from "../api/types";
   import * as api from "../api/client";
   import Badge from "../components/Badge.svelte";
-  import ContextDetail from "../components/ContextDetail.svelte";
+  import MemoryDetail from "../components/MemoryDetail.svelte";
   import { formatDuration, timeAgo } from "../format/time";
   import { renderMarkdown } from "../format/markdown";
 
   const STAGE_DESCRIPTIONS: Record<string, string> = {
     ingest: "Load and parse data from external sources",
-    prepare: "Serve relevant context entries to the session",
+    prepare: "Serve relevant memory entries to the session",
     extract: "Run AI agent to extract knowledge entries",
-    evaluate: "Score relevance of served context entries",
+    evaluate: "Score relevance of served memory entries",
     summarize: "Aggregate results and finalize metrics",
   };
 
@@ -92,16 +92,16 @@
 
     if (stage.name === "prepare") {
       // Session prepare: injected entries
-      if (typeof d.injectionCount === "number") fields.push({ label: "Context Entries Served", value: String(d.injectionCount), type: "number" });
+      if (typeof d.injectionCount === "number") fields.push({ label: "Memory Entries Served", value: String(d.injectionCount), type: "number" });
       if (Array.isArray(d.injectedEntries)) {
         const entries = (d.injectedEntries as { id?: string; title?: string }[]).filter((e) => e.id && e.title);
         if (entries.length > 0) fields.push({ label: "Served Entries", value: "", type: "entries", entries: entries as { id: string; title: string }[] });
       }
-      // Git/repo prepare: existing entries providing context
+      // Git/repo prepare: existing memory entries
       if (typeof d.existingCount === "number") fields.push({ label: "Existing Entries", value: String(d.existingCount), type: "number" });
       if (Array.isArray(d.existingEntries)) {
         const entries = (d.existingEntries as { id?: string; title?: string }[]).filter((e) => e.id && e.title);
-        if (entries.length > 0) fields.push({ label: "Context Entries", value: "", type: "entries", entries: entries as { id: string; title: string }[] });
+        if (entries.length > 0) fields.push({ label: "Memory Entries", value: "", type: "entries", entries: entries as { id: string; title: string }[] });
       }
     }
 
@@ -262,4 +262,4 @@
   {/if}
 </div>
 
-<ContextDetail contextId={previewId} onClose={() => { previewId = null; }} />
+<MemoryDetail memoryId={previewId} onClose={() => { previewId = null; }} />

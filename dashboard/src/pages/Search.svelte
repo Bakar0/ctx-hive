@@ -1,7 +1,7 @@
 <script lang="ts">
   import StatCard from "../components/StatCard.svelte";
   import Pagination from "../components/Pagination.svelte";
-  import ContextDetail from "../components/ContextDetail.svelte";
+  import MemoryDetail from "../components/MemoryDetail.svelte";
   import AlgorithmBadge from "../components/AlgorithmBadge.svelte";
   import SpeedComparisonBar from "../components/SpeedComparisonBar.svelte";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -186,7 +186,7 @@
       <div class="flex gap-2">
         <Input
           type="text"
-          placeholder="Search contexts..."
+          placeholder="Search memories..."
           value={searchQuery}
           oninput={onSearchInput}
           class="flex-1 font-mono"
@@ -303,7 +303,7 @@
       {:else if searchQuery.trim() === ""}
         <div class="text-center py-12 text-muted-foreground">
           <div class="text-[32px] mb-3 opacity-40">&#x1F50D;</div>
-          <p class="text-sm">Type a query above to search your contexts</p>
+          <p class="text-sm">Type a query above to search your memories</p>
         </div>
       {/if}
     </div>
@@ -521,4 +521,4 @@
   </Tabs.Content>
 </Tabs.Root>
 
-<ContextDetail contextId={previewId} onClose={() => (previewId = null)} />
+<MemoryDetail memoryId={previewId} onClose={() => (previewId = null)} />

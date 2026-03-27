@@ -46,8 +46,8 @@ export function broadcastJobEvent(
   broadcast(type, job);
 }
 
-export function broadcastContextEvent(
-  type: "context:created" | "context:deleted",
+export function broadcastMemoryEvent(
+  type: "memory:created" | "memory:deleted",
   data: unknown
 ): void {
   metricsDirty = true;

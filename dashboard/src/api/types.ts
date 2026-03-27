@@ -84,7 +84,7 @@ export interface MetricsSnapshot {
     failed: number;
     total: number;
   };
-  contexts: {
+  memories: {
     total: number;
     byScope: Record<string, number>;
     byProject: Record<string, number>;
@@ -92,7 +92,7 @@ export interface MetricsSnapshot {
   recentJobs: JobView[];
 }
 
-// ── Context types ────────────────────────────────────────────────────
+// ── Memory types ─────────────────────────────────────────────────────
 
 export interface IndexEntry {
   id: string;
@@ -106,7 +106,7 @@ export interface IndexEntry {
   path: string;
 }
 
-export interface ContextEntry extends IndexEntry {
+export interface MemoryEntry extends IndexEntry {
   body: string;
 }
 
@@ -146,7 +146,7 @@ export interface DiscoveredRepo {
   tracked: boolean;
   trackedAt?: string;
   lastScannedAt?: string;
-  contextCount: number;
+  memoryCount: number;
   currentBranch: string;
   behindCount: number;
   modifiedCount: number;
@@ -265,8 +265,8 @@ export type WsEvent =
   | "job:completed"
   | "job:failed"
   | "job:queued"
-  | "context:created"
-  | "context:deleted"
+  | "memory:created"
+  | "memory:deleted"
   | "repo:tracked"
   | "repo:untracked"
   | "repo:scan-complete"

@@ -1,6 +1,6 @@
 /**
  * UserPromptSubmit hook handler.
- * Reads the hook payload from stdin, searches ctx-hive for relevant context,
+ * Reads the hook payload from stdin, searches ctx-hive for relevant memories,
  * and returns JSON with additionalContext for Claude to see.
  */
 import { basename, join } from "node:path";
@@ -39,8 +39,8 @@ const SEARCH_SIGNALS = [
 ];
 
 /**
- * Decide whether a prompt is worth searching for context.
- * Returns false for action commands and confirmations where context injection adds noise.
+ * Decide whether a prompt is worth searching for memories.
+ * Returns false for action commands and confirmations where memory injection adds noise.
  */
 export function shouldSearch(prompt: string, tokens: string[]): boolean {
   const trimmed = prompt.trim();
@@ -91,13 +91,13 @@ function formatInjectResult(results: SearchResult[]): string {
   });
 
   return [
-    "[ctx-hive] Relevant context from your organization's knowledge base:",
+    "[ctx-hive] Relevant memories from your organization's knowledge base:",
     "",
     ...entries.join("\n\n---\n\n").split("\n"),
     "",
     "---",
     'Use `ctx-hive search "<query>"` or `ctx-hive show <id>` for full entries.',
-    'If you use any of the above context in your response, mention each entry you referenced using this format: "📚 Referenced ctx-hive entry: <entry title>"',
+    'If you use any of the above memories in your response, mention each entry you referenced using this format: "📚 Referenced ctx-hive entry: <entry title>"',
   ].join("\n");
 }
 

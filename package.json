@@ -15,6 +15,7 @@
     "deploy": "bun run build && cp ctx-hive ~/.local/bin/ctx-hive",
     "lint": "oxlint --type-aware",
     "typecheck": "bunx tsc --noEmit",
+    "check:dashboard": "cd dashboard && bun install --frozen-lockfile && bunx svelte-check --tsconfig ./tsconfig.json",
     "test": "bun test"
   },
   "devDependencies": {

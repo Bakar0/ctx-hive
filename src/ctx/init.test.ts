@@ -155,7 +155,7 @@ test("buildRepoPrompt includes existing entries in update mode", () => {
     true,
   );
 
-  expect(prompt).toContain("Existing Context Entries (1)");
+  expect(prompt).toContain("Existing Memory Entries (1)");
   expect(prompt).toContain("Auth patterns");
   expect(prompt).toContain("UPDATE run");
   expect(prompt).toContain("ctx-hive delete");
@@ -226,6 +226,6 @@ test("buildSessionPrompt includes existing entries in update mode", () => {
     true,
   );
 
-  expect(prompt).toContain("Existing Context Entries (1)");
+  expect(prompt).toContain("Existing Memory Entries (1)");
   expect(prompt).toContain("UPDATE run");
 });

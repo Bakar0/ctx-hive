@@ -2,7 +2,7 @@
   import StatCard from "../components/StatCard.svelte";
   import Badge from "../components/Badge.svelte";
   import Pagination from "../components/Pagination.svelte";
-  import ContextDetail from "../components/ContextDetail.svelte";
+  import MemoryDetail from "../components/MemoryDetail.svelte";
   import { Badge as ShadBadge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -14,14 +14,14 @@
   import { timeAgo } from "../format/time";
   import { formatCompact } from "../format/numbers";
   import * as api from "../api/client";
-  import type { ContextEntry, EntrySignals } from "../api/types";
+  import type { MemoryEntry, EntrySignals } from "../api/types";
 
   interface Props { projects: string[]; }
   let { projects }: Props = $props();
 
   let selectedId = $state<string | null>(null);
 
-  let allContexts = $state<ContextEntry[]>([]);
+  let allMemories = $state<MemoryEntry[]>([]);
   let allSignals = $state<Record<string, EntrySignals>>({});
   let searchText = $state("");
   let scopeFilter = $state("");
@@ -33,19 +33,19 @@
   let page = $state(1);
   const pageSize = 25;
 
-  $effect(() => { fetchContexts(); });
+  $effect(() => { fetchMemories(); });
 
-  export async function fetchContexts() {
+  export async function fetchMemories() {
     try {
-      const [ctxRes, sigRes] = await Promise.all([api.getContexts(), api.getSignals()]);
-      allContexts = ctxRes;
+      const [ctxRes, sigRes] = await Promise.all([api.getMemories(), api.getSignals()]);
+      allMemories = ctxRes;
       allSignals = sigRes.entries ?? {};
     } catch { /* silent */ }
   }
 
   let allTags = $derived.by(() => {
     const set = new Set<string>();
-    for (const c of allContexts) for (const t of c.tags ?? []) set.add(t);
+    for (const c of allMemories) for (const t of c.tags ?? []) set.add(t);
     return [...set].sort();
   });
 
@@ -65,7 +65,7 @@
     return recent > 0 ? "active" : "stale";
   }
 
-  function isStale(c: ContextEntry): boolean {
+  function isStale(c: MemoryEntry): boolean {
     const sig = allSignals[c.id];
     const cutoff = Date.now() - 30 * 86400000;
     const updatedOld = new Date(c.updated).getTime() < cutoff;
@@ -75,7 +75,7 @@
   }
 
   let filtered = $derived.by(() => {
-    let list = allContexts;
+    let list = allMemories;
     if (searchText !== "") {
       const q = searchText.toLowerCase();
       list = list.filter((c) => (c.title ?? "").toLowerCase().includes(q) || (c.tags ?? []).join(" ").toLowerCase().includes(q) || (c.body ?? "").toLowerCase().includes(q));
@@ -102,18 +102,18 @@
 
   let stats = $derived.by(() => {
     let scored = 0, totalScore = 0, highCount = 0, lowCount = 0, unscoredCount = 0, staleCount = 0;
-    for (const c of allContexts) {
+    for (const c of allMemories) {
       const sig = allSignals[c.id];
       if (!sig) { unscoredCount++; } else { scored++; totalScore += sig.score; if (sig.score >= 0.6) highCount++; if (sig.score < 0.3) lowCount++; }
       if (isStale(c)) staleCount++;
     }
-    return { total: allContexts.length, avgScore: scored > 0 ? totalScore / scored : 0, highCount, lowCount, unscoredCount, staleCount, scored };
+    return { total: allMemories.length, avgScore: scored > 0 ? totalScore / scored : 0, highCount, lowCount, unscoredCount, staleCount, scored };
   });
 
   let scoreDist = $derived.by(() => {
     const buckets = Array(10).fill(0) as number[];
     let noData = 0;
-    for (const c of allContexts) {
+    for (const c of allMemories) {
       const sig = allSignals[c.id];
       if (!sig) { noData++; continue; }
       buckets[Math.min(Math.floor(sig.score * 10), 9)]++;
@@ -125,7 +125,7 @@
 
   let scopeHealth = $derived.by(() => {
     const data: Record<string, Record<string, number>> = { project: { high: 0, mid: 0, low: 0, none: 0 }, org: { high: 0, mid: 0, low: 0, none: 0 }, personal: { high: 0, mid: 0, low: 0, none: 0 } };
-    for (const c of allContexts) { const d = data[c.scope]; if (d != null) d[scoreTier(c.id)]++; }
+    for (const c of allMemories) { const d = data[c.scope]; if (d != null) d[scoreTier(c.id)]++; }
     return (["project", "org", "personal"] as const).filter((s) => { const d = data[s]!; return d.high + d.mid + d.low + d.none > 0; }).map((s) => {
       const d = data[s]!;
       return { label: s, segments: [{ label: "high", color: "var(--success)", value: d.high }, { label: "mid", color: "var(--warning)", value: d.mid }, { label: "low", color: "var(--destructive)", value: d.low }, { label: "none", color: "var(--dim)", value: d.none }] };
@@ -135,21 +135,21 @@
   function scoreBarColor(s: number): string { return s < 0.3 ? "var(--destructive)" : s < 0.6 ? "var(--warning)" : "var(--success)"; }
 
   async function handleDelete(id: string) {
-    if (!confirm("Delete this context entry? This cannot be undone.")) return;
-    try { await api.deleteContext(id); await fetchContexts(); } catch { /* silent */ }
+    if (!confirm("Delete this memory entry? This cannot be undone.")) return;
+    try { await api.deleteMemory(id); await fetchMemories(); } catch { /* silent */ }
   }
 
   function resetPage() { page = 1; }
 </script>
 
 <div class="mb-6">
-  <h1 class="text-xl font-semibold mb-1">Contexts</h1>
-  <p class="text-sm text-muted-foreground">Browse and manage your stored context entries</p>
+  <h1 class="text-xl font-semibold mb-1">Memories</h1>
+  <p class="text-sm text-muted-foreground">Browse and manage your stored memories</p>
 </div>
 
-{#if allContexts.length > 0}
+{#if allMemories.length > 0}
   <div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3 mb-6">
-    <StatCard label="Total Contexts" value={stats.total} color="accent" />
+    <StatCard label="Total Memories" value={stats.total} color="accent" />
     <StatCard label="Avg Score" value={stats.scored > 0 ? stats.avgScore.toFixed(2) : "\u2014"} color={stats.avgScore < 0.3 ? "red" : stats.avgScore < 0.6 ? "yellow" : "green"} />
     <StatCard label="Healthy" value={stats.highCount} color="green" />
     <StatCard label="Needs Review" value={stats.lowCount} color={stats.lowCount > 0 ? "red" : ""} sub="{stats.total > 0 ? Math.round(stats.lowCount / stats.total * 100) : 0}% of total" />
@@ -202,7 +202,7 @@
       </Table.Header>
       <Table.Body>
         {#if filtered.length === 0}
-          <Table.Row><Table.Cell colspan={8} class="text-center text-muted-foreground py-8">No contexts match filters</Table.Cell></Table.Row>
+          <Table.Row><Table.Cell colspan={8} class="text-center text-muted-foreground py-8">No memories match filters</Table.Cell></Table.Row>
         {:else}
           {#each pageItems as c (c.id)}
             {@const sig = allSignals[c.id]}
@@ -252,8 +252,8 @@
 {:else}
   <div class="text-center py-12 text-muted-foreground">
     <div class="text-[32px] mb-3 opacity-40">&#x1F4ED;</div>
-    <p class="text-sm">No contexts yet. Run <code class="text-primary">ctx-hive init</code> to auto-generate entries.</p>
+    <p class="text-sm">No memories yet. Run <code class="text-primary">ctx-hive init</code> to auto-generate entries.</p>
   </div>
 {/if}
 
-<ContextDetail contextId={selectedId} onClose={() => (selectedId = null)} onDelete={() => { selectedId = null; void fetchContexts(); }} />
+<MemoryDetail memoryId={selectedId} onClose={() => (selectedId = null)} onDelete={() => { selectedId = null; void fetchMemories(); }} />

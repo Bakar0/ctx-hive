@@ -3,10 +3,11 @@
 
   interface Props {
     variant: NonNullable<BadgeVariant>;
+    label?: string;
     pulse?: boolean;
   }
 
-  let { variant, pulse = false }: Props = $props();
+  let { variant, label, pulse = false }: Props = $props();
 </script>
 
-<ShadBadge {variant} class={pulse ? "animate-pulse" : ""}>{variant}</ShadBadge>
+<ShadBadge {variant} class={pulse ? "animate-pulse" : ""}>{label ?? variant}</ShadBadge>

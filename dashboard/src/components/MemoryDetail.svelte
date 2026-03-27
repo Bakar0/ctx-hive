@@ -7,34 +7,34 @@
   import { formatCompact } from "../format/numbers";
   import { renderMarkdown } from "../format/markdown";
   import * as api from "../api/client";
-  import type { ContextEntry, EntrySignals } from "../api/types";
+  import type { MemoryEntry, EntrySignals } from "../api/types";
   import { computeUsageScore, computeRelevanceScore, RATING_LEGEND } from "$lib/scoring";
 
   interface Props {
-    contextId: string | null;
+    memoryId: string | null;
     onClose: () => void;
     onDelete?: (id: string) => void;
   }
 
-  let { contextId, onClose, onDelete }: Props = $props();
+  let { memoryId, onClose, onDelete }: Props = $props();
 
-  let context = $state<ContextEntry | null>(null);
+  let memory = $state<MemoryEntry | null>(null);
   let signals = $state<EntrySignals | null>(null);
   let viewMode = $state<"preview" | "raw">("preview");
-  let renderedHtml = $derived(context ? renderMarkdown(context.body) : "");
+  let renderedHtml = $derived(memory ? renderMarkdown(memory.body) : "");
 
   $effect(() => {
-    if (contextId == null) {
-      context = null;
+    if (memoryId == null) {
+      memory = null;
       signals = null;
       return;
     }
     viewMode = "preview";
-    const id = contextId;
+    const id = memoryId;
     void (async () => {
       try {
-        const [ctxAll, sigStore] = await Promise.all([api.getContexts(), api.getSignals()]);
-        context = ctxAll.find((c) => c.id === id) ?? null;
+        const [ctxAll, sigStore] = await Promise.all([api.getMemories(), api.getSignals()]);
+        memory = ctxAll.find((c) => c.id === id) ?? null;
         signals = sigStore.entries?.[id] ?? null;
       } catch { /* silent */ }
     })();
@@ -58,27 +58,27 @@
   const RATING_LABELS: Record<string, string> = Object.fromEntries(RATING_LEGEND.map(r => [String(r.rating), r.label]));
 
   async function handleDelete(id: string) {
-    if (!confirm("Delete this context entry? This cannot be undone.")) return;
+    if (!confirm("Delete this memory entry? This cannot be undone.")) return;
     try {
-      await api.deleteContext(id);
+      await api.deleteMemory(id);
       onClose();
       onDelete?.(id);
     } catch { /* silent */ }
   }
 </script>
 
-<Dialog.Root open={contextId != null} onOpenChange={(open) => { if (!open) onClose(); }}>
+<Dialog.Root open={memoryId != null} onOpenChange={(open) => { if (!open) onClose(); }}>
   <Dialog.Content class="max-w-3xl sm:max-w-3xl max-h-[85vh] flex flex-col overflow-hidden p-0 gap-0">
-    {#if context}
+    {#if memory}
       <Dialog.Header class="sticky top-0 z-10 bg-card border-b p-4 pb-3 shrink-0">
-        <Dialog.Title>{context.title}</Dialog.Title>
+        <Dialog.Title>{memory.title}</Dialog.Title>
       </Dialog.Header>
       <div class="flex-1 overflow-y-auto px-4 py-4">
       <div class="flex gap-3 flex-wrap mb-4">
-        <Badge variant={context.scope} />
-        <span class="font-mono text-xs">{context.project || "\u2014"}</span>
-        <span class="font-mono text-xs text-muted-foreground">{context.id}</span>
-        {#if context.tokens > 0}<span class="font-mono text-xs text-muted-foreground">{formatCompact(context.tokens)} tokens</span>{/if}
+        <Badge variant={memory.scope} />
+        <span class="font-mono text-xs">{memory.project || "\u2014"}</span>
+        <span class="font-mono text-xs text-muted-foreground">{memory.id}</span>
+        {#if memory.tokens > 0}<span class="font-mono text-xs text-muted-foreground">{formatCompact(memory.tokens)} tokens</span>{/if}
       </div>
 
       <div class="flex gap-4 mb-4 flex-wrap">
@@ -99,7 +99,7 @@
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">Evals</span>
           </div>
           <div class="flex flex-col items-center px-3 py-2 bg-background border rounded-md min-w-20">
-            <span class="text-lg font-bold font-mono">{Math.floor((Date.now() - new Date(context.updated).getTime()) / 86400000)}</span>
+            <span class="text-lg font-bold font-mono">{Math.floor((Date.now() - new Date(memory.updated).getTime()) / 86400000)}</span>
             <span class="text-[10px] text-dim uppercase tracking-wider mt-0.5">Days Old</span>
           </div>
         </div>
@@ -122,10 +122,11 @@
           >Raw</button>
         </div>
       </div>
-      <div class="grid [&>*]:col-start-1 [&>*]:row-start-1">
-        <div class="{viewMode !== 'raw' ? 'invisible' : ''} text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words bg-background rounded-md p-4 border">{context.body}</div>
-        <div class="{viewMode !== 'preview' ? 'invisible' : ''} text-sm bg-background rounded-md p-4 border prose prose-invert prose-sm max-w-none">{@html renderedHtml}</div>
-      </div>
+      {#if viewMode === "raw"}
+        <div class="text-sm leading-relaxed text-muted-foreground whitespace-pre-wrap break-words bg-background rounded-md p-4 border">{memory.body}</div>
+      {:else}
+        <div class="text-sm bg-background rounded-md p-4 border prose prose-invert prose-sm max-w-none">{@html renderedHtml}</div>
+      {/if}
 
       {#if signals}
         <div class="mt-4 p-4 bg-background border rounded-md">
@@ -191,8 +192,8 @@
 
       </div>
       <Dialog.Footer class="sticky bottom-0 shrink-0 mx-0 mb-0 rounded-b-xl border-t bg-card p-4 pt-3">
-        <Button variant="outline" size="sm" onclick={() => navigator.clipboard.writeText(context!.id)}>Copy ID</Button>
-        <Button variant="destructive" size="sm" onclick={() => handleDelete(context!.id)}>Delete</Button>
+        <Button variant="outline" size="sm" onclick={() => navigator.clipboard.writeText(memory!.id)}>Copy ID</Button>
+        <Button variant="destructive" size="sm" onclick={() => handleDelete(memory!.id)}>Delete</Button>
         <Dialog.Close>
           <Button variant="outline" size="sm">Close</Button>
         </Dialog.Close>

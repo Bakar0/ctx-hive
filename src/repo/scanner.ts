@@ -17,7 +17,7 @@ export interface DiscoveredRepo {
   tracked: boolean;
   trackedAt?: string;
   lastScannedAt?: string;
-  contextCount: number;
+  memoryCount: number;
   currentBranch: string;
   behindCount: number;
   modifiedCount: number;
@@ -69,7 +69,7 @@ function expandHome(p: string): string {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function buildContextCountMap(index: IndexEntry[]): Map<string, number> {
+function buildMemoryCountMap(index: IndexEntry[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const entry of index) {
     if (entry.project) {
@@ -91,7 +91,7 @@ export async function discoverRepos(
   const tracked = loadTrackedRepos();
   const scanned = await scanForRepos(root, maxDepth);
 
-  const contextCounts = buildContextCountMap(index);
+  const memoryCounts = buildMemoryCountMap(index);
 
   // Build tracked map: absPath -> TrackedRepo
   const trackedMap = new Map<string, TrackedRepo>();
@@ -119,7 +119,7 @@ export async function discoverRepos(
         tracked: t !== undefined,
         trackedAt: t?.trackedAt,
         lastScannedAt: t?.lastScannedAt,
-        contextCount: contextCounts.get(meta.name) ?? 0,
+        memoryCount: memoryCounts.get(meta.name) ?? 0,
         currentBranch: branchInfo.currentBranch,
         behindCount: branchInfo.behindCount,
         modifiedCount: branchInfo.modifiedCount,
@@ -140,7 +140,7 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
   const index = loadIndex();
   const tracked = loadTrackedRepos();
 
-  const contextCounts = buildContextCountMap(index);
+  const memoryCounts = buildMemoryCountMap(index);
 
   const results = await Promise.all(
     tracked.map(async (repo): Promise<DiscoveredRepo> => {
@@ -167,7 +167,7 @@ export async function enrichTrackedRepos(): Promise<DiscoveredRepo[]> {
         tracked: true,
         trackedAt: repo.trackedAt,
         lastScannedAt: repo.lastScannedAt,
-        contextCount: contextCounts.get(repo.name) ?? 0,
+        memoryCount: memoryCounts.get(repo.name) ?? 0,
         currentBranch: branchInfo.currentBranch,
         behindCount: branchInfo.behindCount,
         modifiedCount: branchInfo.modifiedCount,

@@ -1,17 +1,17 @@
 ---
 name: ctx-hive
-description: Search the Context Hive for organizational knowledge, project context, architectural decisions, and past findings.
+description: Search the Memory Hive for organizational knowledge, project memories, architectural decisions, and past findings.
 ---
 
-# Context Hive
+# Memory Hive
 
-A persistent context store for organizational knowledge, project context, and personal notes that persists across Claude sessions.
+A persistent memory store for organizational knowledge, project memories, and personal notes that persists across Claude sessions.
 
 ## When to use
 
 - Before making architectural decisions — check if there are existing standards or past decisions
 - When reviewing unfamiliar code — check for project-specific conventions
-- When you encounter a pattern you're unsure about — search for prior context
+- When you encounter a pattern you're unsure about — search for prior memories
 - When the user asks you to remember or recall something from past sessions
 
 ## How to search

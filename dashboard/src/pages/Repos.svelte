@@ -78,7 +78,7 @@
   <div class="overflow-x-auto">
     <Table.Root>
       <Table.Header>
-        <Table.Row><Table.Head>Name</Table.Head><Table.Head>Status</Table.Head><Table.Head>Contexts</Table.Head><Table.Head>Last Scanned</Table.Head><Table.Head></Table.Head></Table.Row>
+        <Table.Row><Table.Head>Name</Table.Head><Table.Head>Status</Table.Head><Table.Head>Memories</Table.Head><Table.Head>Last Scanned</Table.Head><Table.Head></Table.Head></Table.Row>
       </Table.Header>
       <Table.Body>
         {#if filtered.length === 0}
@@ -115,7 +115,7 @@
                 {:else if r.tracked}<Badge variant="tracked" />
                 {:else}<Badge variant="untracked" />{/if}
               </Table.Cell>
-              <Table.Cell class="font-mono text-xs text-muted-foreground">{r.contextCount}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground">{r.memoryCount}</Table.Cell>
               <Table.Cell class="font-mono text-xs text-muted-foreground">{timeAgo(r.lastScannedAt)}</Table.Cell>
               <Table.Cell>
                 <div class="flex gap-1 items-center">

@@ -32,13 +32,13 @@ function parseTags(raw: string | undefined): string[] {
 
 function printCtxHelp() {
   console.log(`
-ctx-hive — Context Hive: persistent context store
+ctx-hive — Memory Hive: persistent memory store
 
 Usage:
   ctx-hive <subcommand> [options]
 
 Subcommands:
-  add                            Add a new context entry
+  add                            Add a new memory entry
     --title <title>              Entry title (required)
     --scope <project|org|personal>  Scope (default: personal)
     --tags <t1,t2,...>           Comma-separated tags
@@ -46,7 +46,7 @@ Subcommands:
     --body <text>                Entry body text
     --file <path>                Read body from file
 
-  search <query>                 Search the context hive
+  search <query>                 Search the memory hive
     --scope <scope>              Filter by scope
     --tags <t1,t2,...>           Filter by tags
     --project <name>             Filter by project

@@ -1,6 +1,6 @@
 /**
  * REST API endpoints for the ctx-hive dashboard.
- * Provides read access to jobs, contexts, pipelines, and metrics.
+ * Provides read access to jobs, memories, pipelines, and metrics.
  */
 import { basename } from "node:path";
 import { z } from "zod";
@@ -73,7 +73,7 @@ export interface MetricsSnapshot {
     failed: number;
     total: number;
   };
-  contexts: {
+  memories: {
     total: number;
     byScope: Record<string, number>;
     byProject: Record<string, number>;
@@ -162,7 +162,7 @@ export function getAllJobs(): JobView[] {
   return rows.map(jobDbRowToView);
 }
 
-export function getContexts(params: {
+export function getMemories(params: {
   scope?: string;
   project?: string;
   sortBy?: "time" | "project";
@@ -204,10 +204,10 @@ export async function getMetrics(): Promise<MetricsSnapshot> {
     "SELECT scope, COUNT(*) as cnt FROM entries GROUP BY scope",
   ).all();
   const byScope: Record<string, number> = {};
-  let contextTotal = 0;
+  let memoryTotal = 0;
   for (const row of scopeCounts) {
     byScope[row.scope] = row.cnt;
-    contextTotal += row.cnt;
+    memoryTotal += row.cnt;
   }
 
   const projectCounts = db.prepare<{ project: string; cnt: number }, []>(
@@ -227,12 +227,12 @@ export async function getMetrics(): Promise<MetricsSnapshot> {
   return {
     timestamp: new Date().toISOString(),
     jobs: { pending: jobsPending, processing: jobsProcessing, done: jobsDone, failed: jobsFailed, total },
-    contexts: { total: contextTotal, byScope, byProject },
+    memories: { total: memoryTotal, byScope, byProject },
     recentJobs,
   };
 }
 
-export function deleteContextById(idOrSlug: string): boolean {
+export function deleteMemoryById(idOrSlug: string): boolean {
   const resolved = resolveEntry(idOrSlug);
   if (!resolved) return false;
   deleteEntry(resolved.scope, resolved.slug);
@@ -414,20 +414,20 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     return json({ ok: true });
   }
 
-  // GET /api/contexts?scope=...&project=...&sortBy=time|project
-  if (path === "/api/contexts" && req.method === "GET") {
+  // GET /api/memories?scope=...&project=...&sortBy=time|project
+  if (path === "/api/memories" && req.method === "GET") {
     const scope = url.searchParams.get("scope") ?? undefined;
     const project = url.searchParams.get("project") ?? undefined;
     const sortByParam = url.searchParams.get("sortBy");
     const sortBy = sortByParam === "project" ? "project" : "time";
-    return json(getContexts({ scope, project, sortBy }));
+    return json(getMemories({ scope, project, sortBy }));
   }
 
-  // DELETE /api/contexts/:id
-  const deleteMatch = /^\/api\/contexts\/(.+)$/.exec(path);
+  // DELETE /api/memories/:id
+  const deleteMatch = /^\/api\/memories\/(.+)$/.exec(path);
   if (deleteMatch && req.method === "DELETE") {
     const id = decodeURIComponent(deleteMatch[1]!);
-    const deleted = deleteContextById(id);
+    const deleted = deleteMemoryById(id);
     if (deleted) return json({ ok: true });
     return json({ error: "Not found" }, 404);
   }
@@ -621,7 +621,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     }
   }
 
-  // POST /api/repos/sync — full context sync (enqueues init-style job)
+  // POST /api/repos/sync — full memory sync (enqueues init-style job)
   if (path === "/api/repos/sync" && req.method === "POST") {
     try {
       const result = RepoBodySchema.safeParse(await req.json());

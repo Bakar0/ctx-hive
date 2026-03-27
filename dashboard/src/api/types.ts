@@ -221,6 +221,27 @@ export interface VectorSearchSettings {
   hasApiKey: boolean;
   embeddedCount: number;
   totalCount: number;
+  sqliteVecAvailable: boolean;
+}
+
+// ── Search analytics types ──────────────────────────────────────────
+
+export interface SpeedTrendPoint {
+  date: string;
+  avgFtsDurationMs: number | null;
+  avgVectorDurationMs: number | null;
+  count: number;
+}
+
+export interface AlgorithmEvaluation {
+  avgRating: number;
+  totalEvaluated: number;
+  distribution: Record<string, number>;
+}
+
+export interface SearchAnalytics {
+  speedTrend: SpeedTrendPoint[];
+  evaluationByAlgorithm: Record<string, AlgorithmEvaluation>;
 }
 
 export interface BackfillStatus {

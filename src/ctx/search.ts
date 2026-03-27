@@ -362,43 +362,6 @@ export async function searchMulti(
   return { merged, algorithms, mergeStrategy };
 }
 
-// ── Backward-compatible search (sync wrapper) ─────────────────────────
-
-/**
- * Backward-compatible synchronous search. Uses FTS5 only.
- * For multi-algorithm search, use searchMulti() instead.
- */
-export function search(
-  query: string,
-  filters: SearchFilters = {},
-  limit = 10,
-  meta?: SearchMeta,
-): SearchResult[] {
-  const start = Date.now();
-  const results = ftsSearch(query, filters, limit);
-
-  // Record search hits
-  recordSearchHits(results.map((r) => r.id));
-
-  // Record search event to history
-  if (meta?.source) {
-    appendSearchRecord({
-      timestamp: new Date().toISOString(),
-      source: meta.source,
-      query,
-      project: meta.project,
-      cwd: meta.cwd,
-      sessionId: meta.sessionId,
-      resultCount: results.length,
-      results: results.map((r) => ({ id: r.id, title: r.title, score: r.score, tokens: r.tokens })),
-      durationMs: Date.now() - start,
-      ftsDurationMs: Date.now() - start,
-    });
-  }
-
-  return results;
-}
-
 // ── Formatters ─────────────────────────────────────────────────────────
 
 export function formatHuman(results: SearchResult[]): string {

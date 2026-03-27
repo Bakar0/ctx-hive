@@ -13,6 +13,7 @@ import type {
   MultiSearchResponse,
   VectorSearchSettings,
   BackfillStatus,
+  SearchAnalytics,
 } from "./types";
 
 const BASE = "";
@@ -110,11 +111,9 @@ export function searchEntries(params: {
   project?: string;
   tags?: string;
   limit?: number;
-  mode?: "merged" | "full";
 }): Promise<MultiSearchResponse> {
   const sp = new URLSearchParams();
   sp.set("q", params.q);
-  sp.set("mode", params.mode ?? "full");
   sp.set("source", "api");
   if (params.scope != null && params.scope !== "") sp.set("scope", params.scope);
   if (params.project != null && params.project !== "") sp.set("project", params.project);
@@ -143,6 +142,10 @@ export function triggerBackfill(): Promise<{ ok: boolean }> {
 
 export function getBackfillStatus(): Promise<BackfillStatus> {
   return get("/api/settings/vector-search/status");
+}
+
+export function getSearchAnalytics(): Promise<SearchAnalytics> {
+  return get("/api/search-analytics");
 }
 
 // ── Sessions ────────────────────────────────────────────────────────

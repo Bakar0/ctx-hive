@@ -151,6 +151,95 @@ export function getSessionEntries(
   return rows;
 }
 
+// ── Analytics ─────────────────────────────────────────────────────────
+
+export interface SpeedTrendPoint {
+  date: string;
+  avgFtsDurationMs: number | null;
+  avgVectorDurationMs: number | null;
+  count: number;
+}
+
+export interface AlgorithmEvaluation {
+  avgRating: number;
+  totalEvaluated: number;
+  distribution: Record<string, number>;
+}
+
+export interface SearchAnalytics {
+  speedTrend: SpeedTrendPoint[];
+  evaluationByAlgorithm: Record<string, AlgorithmEvaluation>;
+}
+
+export function getSearchAnalytics(): SearchAnalytics {
+  const db = getDb();
+
+  // Speed trend: avg durations per day, last 30 days
+  interface SpeedRow {
+    date: string;
+    avg_fts: number | null;
+    avg_vec: number | null;
+    cnt: number;
+  }
+  const speedRows = db.prepare<SpeedRow, []>(`
+    SELECT DATE(timestamp) as date,
+           AVG(fts_duration_ms) as avg_fts,
+           AVG(vector_duration_ms) as avg_vec,
+           COUNT(*) as cnt
+    FROM search_history
+    WHERE timestamp >= DATE('now', '-30 days')
+    GROUP BY DATE(timestamp)
+    ORDER BY date ASC
+  `).all();
+
+  const speedTrend: SpeedTrendPoint[] = speedRows.map((r) => ({
+    date: r.date,
+    avgFtsDurationMs: r.avg_fts,
+    avgVectorDurationMs: r.avg_vec,
+    count: r.cnt,
+  }));
+
+  // Evaluation by algorithm: join search_results → search_history → signal_evaluations
+  interface EvalRow {
+    algorithm: string;
+    rating: number;
+  }
+  const evalRows = db.prepare<EvalRow, []>(`
+    SELECT sr.algorithm, se.rating
+    FROM search_results sr
+    JOIN search_history sh ON sh.id = sr.history_id
+    JOIN signal_evaluations se
+      ON se.session_id = sh.session_id
+      AND se.entry_id = sr.entry_id
+    WHERE sh.session_id IS NOT NULL
+  `).all();
+
+  // Post-process: split comma-separated algorithms and attribute to both groups
+  const groups: Record<string, { total: number; sum: number; distribution: Record<string, number> }> = {};
+  for (const row of evalRows) {
+    const algos = row.algorithm.split(",");
+    for (const algo of algos) {
+      const key = algo.trim();
+      if (key === "") continue;
+      groups[key] ??= { total: 0, sum: 0, distribution: { "-1": 0, "0": 0, "1": 0, "2": 0 } };
+      groups[key].total += 1;
+      groups[key].sum += row.rating;
+      groups[key].distribution[String(row.rating)] = (groups[key].distribution[String(row.rating)] ?? 0) + 1;
+    }
+  }
+
+  const evaluationByAlgorithm: Record<string, AlgorithmEvaluation> = {};
+  for (const [algo, data] of Object.entries(groups)) {
+    evaluationByAlgorithm[algo] = {
+      avgRating: data.total > 0 ? data.sum / data.total : 0,
+      totalEvaluated: data.total,
+      distribution: data.distribution,
+    };
+  }
+
+  return { speedTrend, evaluationByAlgorithm };
+}
+
 // ── Stats ──────────────────────────────────────────────────────────────
 
 export function getSearchStats(): SearchStats {

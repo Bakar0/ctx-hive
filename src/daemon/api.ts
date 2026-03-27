@@ -4,7 +4,7 @@
  */
 import { basename } from "node:path";
 import { z } from "zod";
-import { getDb } from "../db/connection.ts";
+import { getDb, isSqliteVecAvailable } from "../db/connection.ts";
 import {
   loadIndex,
   loadIndexEntries,
@@ -25,8 +25,8 @@ import {
   updateLastScanned,
 } from "../repo/tracking.ts";
 import { loadSignals } from "../ctx/signals.ts";
-import { search, searchMulti, type SearchFilters } from "../ctx/search.ts";
-import { loadSearchHistory, getSearchStats, type SearchSource } from "../ctx/search-history.ts";
+import { searchMulti, type SearchFilters } from "../ctx/search.ts";
+import { loadSearchHistory, getSearchStats, getSearchAnalytics, type SearchSource } from "../ctx/search-history.ts";
 import { setSetting, getVectorSearchConfig } from "../ctx/settings.ts";
 import { validateApiKey } from "../ctx/embeddings.ts";
 import { countEmbeddings } from "../ctx/vector-search.ts";
@@ -464,7 +464,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
 
   // ── Search endpoints ──────────────────────────────────────────────────
 
-  // GET /api/search?q=...&scope=...&project=...&tags=...&limit=...&mode=merged|full
+  // GET /api/search?q=...&scope=...&project=...&tags=...&limit=...
   if (path === "/api/search" && req.method === "GET") {
     const q = url.searchParams.get("q") ?? "";
     if (q === "") return json({ error: "q parameter required" }, 400);
@@ -478,16 +478,9 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     const rawSource = url.searchParams.get("source");
     const source: SearchSource = rawSource === "inject" ? "inject" : rawSource === "cli" ? "cli" : "api";
     const sessionId = url.searchParams.get("sessionId") ?? undefined;
-    const mode = url.searchParams.get("mode") ?? "merged";
 
-    if (mode === "full") {
-      const result = await searchMulti(q, filters, limit, { source, sessionId, project });
-      return json({ query: q, ...result });
-    }
-
-    // Default: backward-compatible merged-only response
-    const results = search(q, filters, limit, { source, sessionId, project });
-    return json({ query: q, results });
+    const result = await searchMulti(q, filters, limit, { source, sessionId, project });
+    return json({ query: q, ...result });
   }
 
   // GET /api/search-history?since=<ISO>&limit=<n>
@@ -504,6 +497,11 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     return json(getSearchStats());
   }
 
+  // GET /api/search-analytics
+  if (path === "/api/search-analytics" && req.method === "GET") {
+    return json(getSearchAnalytics());
+  }
+
   // ── Vector search settings endpoints ────────────────────────────────
 
   // GET /api/settings/vector-search
@@ -518,6 +516,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       hasApiKey: config.apiKey !== null,
       embeddedCount,
       totalCount,
+      sqliteVecAvailable: isSqliteVecAvailable(),
     });
   }
 

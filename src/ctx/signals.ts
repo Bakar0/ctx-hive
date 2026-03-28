@@ -123,30 +123,6 @@ export function recordEvaluation(
 
 // ── Query ──────────────────────────────────────────────────────────────
 
-function loadEntrySignals(entryId: string): EntrySignals {
-  const db = getDb();
-
-  const hits = db.prepare<HitBucket, [string]>("SELECT date, count FROM signal_hits WHERE entry_id = ?").all(entryId);
-
-  const evals = db.prepare<RelevanceEval, [string]>(
-    "SELECT evaluated_at as evaluatedAt, session_id as sessionId, rating, reason FROM signal_evaluations WHERE entry_id = ?",
-  ).all(entryId);
-
-  const now = new Date();
-  const signals: EntrySignals = {
-    searchHits: hits,
-    evaluations: evals,
-    score: 0,
-    scoreComputedAt: now.toISOString(),
-  };
-  signals.score = computeScore(signals, now);
-  return signals;
-}
-
-export function getSignalScore(entryId: string): number {
-  return loadEntrySignals(entryId).score;
-}
-
 export function getSignalScores(entryIds: string[]): Record<string, number> {
   if (entryIds.length === 0) return {};
   const db = getDb();

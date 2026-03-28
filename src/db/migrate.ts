@@ -28,6 +28,9 @@ export function ensureSchema(db: Database): void {
   if (currentVersion < 5) {
     migrateToV5(db);
   }
+  if (currentVersion < 6) {
+    migrateToV6(db);
+  }
 }
 
 // ── V1 Schema ─────────────────────────────────────────────────────────
@@ -323,6 +326,34 @@ function migrateToV5(db: Database): void {
     db.exec("CREATE INDEX idx_executions_started ON pipeline_executions(started_at)");
 
     db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '5')");
+  });
+
+  migrate();
+}
+
+// ── V6: Add UNIQUE(execution_id, name) to pipeline_stages ────────────
+
+function migrateToV6(db: Database): void {
+  const migrate = db.transaction(() => {
+    db.exec(`CREATE TABLE pipeline_stages_new (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      execution_id TEXT NOT NULL REFERENCES pipeline_executions(id) ON DELETE CASCADE,
+      name         TEXT NOT NULL,
+      status       TEXT NOT NULL,
+      started_at   TEXT,
+      completed_at TEXT,
+      duration_ms  INTEGER,
+      retry_count  INTEGER NOT NULL DEFAULT 0,
+      error        TEXT,
+      metrics      TEXT NOT NULL DEFAULT '{}',
+      UNIQUE(execution_id, name)
+    )`);
+    db.exec("INSERT OR IGNORE INTO pipeline_stages_new SELECT * FROM pipeline_stages");
+    db.exec("DROP TABLE pipeline_stages");
+    db.exec("ALTER TABLE pipeline_stages_new RENAME TO pipeline_stages");
+    db.exec("CREATE INDEX idx_stages_execution ON pipeline_stages(execution_id)");
+
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '6')");
   });
 
   migrate();

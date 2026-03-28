@@ -1,45 +1,10 @@
-import { join } from "node:path";
-import { resolveRepoMeta, buildSessionPrompt, buildEvaluationPrompt, type ServedEntry } from "../../ctx/init.ts";
-import { loadIndex, hiveRoot, type IndexEntry } from "../../ctx/store.ts";
+import { resolveRepoMeta, buildSessionPrompt, buildEvaluationPrompt, checkExistingMemories, type ServedEntry } from "../../ctx/init.ts";
+import { loadIndex, type IndexEntry } from "../../ctx/store.ts";
 import { getSessionEntries } from "../../ctx/search-history.ts";
 import { runSingle } from "../../adapter/agent-runner.ts";
+import { extractTranscriptTokens } from "../../daemon/handlers.ts";
 import type { StageDef } from "../schema.ts";
-
-// ── Constants ────────────────────────────────────────────────────────
-
-const AGENT_MODEL = "sonnet";
-const AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
-const LOGS_DIR = join(hiveRoot(), "logs");
-
-// ── Transcript token extraction ──────────────────────────────────────
-
-async function extractTranscriptTokens(transcriptPath: string): Promise<number | undefined> {
-  try {
-    const text = await Bun.file(transcriptPath).text();
-    const lines = text.trim().split("\n");
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const msg: unknown = JSON.parse(lines[i]!);
-        if (
-          typeof msg !== "object" || msg === null ||
-          !("type" in msg) || msg.type !== "assistant" ||
-          !("message" in msg) || typeof msg.message !== "object" || msg.message === null ||
-          !("usage" in msg.message) || typeof msg.message.usage !== "object" || msg.message.usage === null
-        ) continue;
-        const u = msg.message.usage;
-        const inp = "input_tokens" in u && typeof u.input_tokens === "number" ? u.input_tokens : 0;
-        const cacheCreate = "cache_creation_input_tokens" in u && typeof u.cache_creation_input_tokens === "number" ? u.cache_creation_input_tokens : 0;
-        const cacheRead = "cache_read_input_tokens" in u && typeof u.cache_read_input_tokens === "number" ? u.cache_read_input_tokens : 0;
-        return inp + cacheCreate + cacheRead;
-      } catch {
-        // skip malformed lines
-      }
-    }
-  } catch {
-    // skip if unreadable
-  }
-  return undefined;
-}
+import { AGENT_MODEL, AGENT_TOOLS, LOGS_DIR } from "./constants.ts";
 
 // ── Stage: Ingest ───────────────────────────────────────────────────
 
@@ -68,9 +33,7 @@ export const sessionIngestStage: StageDef<SessionIngestInput, SessionIngestOutpu
     const transcriptTokens = await extractTranscriptTokens(transcriptPath);
     const meta = await resolveRepoMeta(cwd);
     const index = loadIndex();
-    const existing = index.filter(
-      (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-    );
+    const existing = checkExistingMemories(meta.name, index);
     // Find served entries from search history
     const historyEntries = getSessionEntries(sessionId);
     const servedEntries: ServedEntry[] = historyEntries

@@ -439,20 +439,7 @@ ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project 
 }
 
 function ctxMutateInstructions(meta: RepoMeta): string {
-  return `### How to add entries:
-For short entries:
-\`\`\`
-ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --body "Entry body content here"
-\`\`\`
-
-For longer entries, write the body to a temp file first:
-\`\`\`
-cat > /tmp/ctx-entry-body.txt << 'ENTRYEOF'
-Multi-line entry body content here.
-Can span multiple lines.
-ENTRYEOF
-ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --file /tmp/ctx-entry-body.txt
-\`\`\`
+  return `${ctxAddInstructions(meta)}
 
 ### How to delete entries:
 \`\`\`

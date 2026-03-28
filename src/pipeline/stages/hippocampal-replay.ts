@@ -1,17 +1,12 @@
-import { join, basename } from "node:path";
-import { buildReplayPrompt, type ReplayContext } from "../../ctx/init.ts";
-import { loadIndex, hiveRoot } from "../../ctx/store.ts";
+import { basename } from "node:path";
+import { buildReplayPrompt, checkExistingMemories, type ReplayContext } from "../../ctx/init.ts";
+import { loadIndex } from "../../ctx/store.ts";
 import { runSingle } from "../../adapter/agent-runner.ts";
 import type { StageDef } from "../schema.ts";
 import type { SessionExtractOutput, EvaluationOutput, SessionIngestOutput } from "./session.ts";
 import type { GitExtractOutput } from "./git.ts";
 import type { RepoExtractOutput } from "./repo.ts";
-
-// ── Constants ────────────────────────────────────────────────────────
-
-const AGENT_MODEL = "sonnet";
-const AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
-const LOGS_DIR = join(hiveRoot(), "logs");
+import { AGENT_MODEL, AGENT_TOOLS, LOGS_DIR } from "./constants.ts";
 
 // ── Output types ─────────────────────────────────────────────────────
 
@@ -61,9 +56,7 @@ export const sessionReplayStage: StageDef<SessionReplayInput, SessionReplayOutpu
   async run(input, ctx) {
     const { meta, cwd, transcriptPath } = input.extract;
 
-    const existing = loadIndex().filter(
-      (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-    );
+    const existing = checkExistingMemories(meta.name);
 
     const replayContext: ReplayContext = {
       type: "session",
@@ -124,9 +117,7 @@ export const gitReplayStage: StageDef<GitExtractOutput, GitReplayOutput> = {
   async run(input, ctx) {
     const { meta, repoPath, changeDetails } = input;
 
-    const existing = loadIndex().filter(
-      (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-    );
+    const existing = checkExistingMemories(meta.name);
 
     const replayContext: ReplayContext = {
       type: "git-push", // covers both push and pull — the changeDetails has the real trigger
@@ -189,9 +180,7 @@ export const repoReplayStage: StageDef<RepoExtractOutput, RepoReplayOutput> = {
   async run(input, ctx) {
     const { meta, repoPath, repoContext } = input;
 
-    const existing = loadIndex().filter(
-      (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-    );
+    const existing = checkExistingMemories(meta.name);
 
     const replayContext: ReplayContext = {
       type: "repo-sync",

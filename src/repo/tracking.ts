@@ -50,21 +50,6 @@ export function loadTrackedRepos(): TrackedRepo[] {
   return rows.map(rowToTrackedRepo);
 }
 
-export function saveTrackedRepos(repos: TrackedRepo[]): void {
-  const db = getDb();
-  const tx = db.transaction(() => {
-    db.exec("DELETE FROM tracked_repos");
-    const insert = db.prepare(`
-      INSERT INTO tracked_repos (name, abs_path, org, remote_url, tracked_at, last_scanned_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    for (const repo of repos) {
-      insert.run(repo.name, repo.absPath, repo.org, repo.remoteUrl, repo.trackedAt, repo.lastScannedAt ?? null);
-    }
-  });
-  tx();
-}
-
 // ── Track / Untrack ────────────────────────────────────────────────────
 
 export async function trackRepo(absPath: string): Promise<TrackedRepo> {
@@ -131,11 +116,6 @@ export function findTrackedRepoFor(
     }
   }
   return best;
-}
-
-export function isTracked(absPath: string): boolean {
-  const repos = loadTrackedRepos();
-  return findTrackedRepoFor(absPath, repos) !== undefined;
 }
 
 export function updateLastScanned(absPath: string): void {

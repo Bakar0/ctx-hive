@@ -42,31 +42,34 @@ export async function backfillEmbeddings(
 
   state = { inProgress: true, done: 0, total: missing.length, failed: 0 };
 
-  for (let i = 0; i < missing.length; i += BATCH_SIZE) {
-    const batch = missing.slice(i, i + BATCH_SIZE);
-    const texts = batch.map((e) => `${e.title}\n${e.body}`);
+  try {
+    for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+      const batch = missing.slice(i, i + BATCH_SIZE);
+      const texts = batch.map((e) => `${e.title}\n${e.body}`);
 
-    try {
-      const embeddings = await generateEmbeddings(texts, config.apiKey, config.model);
+      try {
+        const embeddings = await generateEmbeddings(texts, config.apiKey, config.model);
 
-      for (let j = 0; j < batch.length; j++) {
-        const entry = batch[j]!;
-        const embedding = embeddings[j];
-        if (embedding !== undefined) {
-          syncEntryEmbedding(entry.id, embedding);
-          state.done++;
-        } else {
-          state.failed++;
+        for (let j = 0; j < batch.length; j++) {
+          const entry = batch[j]!;
+          const embedding = embeddings[j];
+          if (embedding !== undefined) {
+            syncEntryEmbedding(entry.id, embedding);
+            state.done++;
+          } else {
+            state.failed++;
+          }
         }
+      } catch (err) {
+        console.error(`[backfill] Batch ${i}-${i + batch.length} failed:`, err);
+        state.failed += batch.length;
       }
-    } catch (err) {
-      console.error(`[backfill] Batch ${i}-${i + batch.length} failed:`, err);
-      state.failed += batch.length;
-    }
 
-    onProgress?.(state.done, state.total);
+      onProgress?.(state.done, state.total);
+    }
+  } finally {
+    state.inProgress = false;
   }
 
-  state.inProgress = false;
   return { ...state };
 }

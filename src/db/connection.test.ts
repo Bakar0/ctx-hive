@@ -41,10 +41,10 @@ describe("openDb", () => {
     db.close();
   });
 
-  test("schema version is 5", () => {
+  test("schema version is 6", () => {
     const db = openDb(":memory:");
     const row = db.query<{ value: string }, []>("SELECT value FROM schema_meta WHERE key='version'").get()!;
-    expect(row.value).toBe("5");
+    expect(row.value).toBe("6");
     db.close();
   });
 
@@ -53,7 +53,7 @@ describe("openDb", () => {
     // Opening again with same DB should not throw (schema already exists)
     // We can't re-run openDb on same handle, but ensureSchema is called internally
     const row = db.query<{ value: string }, []>("SELECT value FROM schema_meta WHERE key='version'").get()!;
-    expect(row.value).toBe("5");
+    expect(row.value).toBe("6");
     db.close();
   });
 

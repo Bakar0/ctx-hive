@@ -17,10 +17,6 @@ export function removeClient(ws: ServerWebSocket<unknown>): void {
   clients.delete(ws);
 }
 
-export function clientCount(): number {
-  return clients.size;
-}
-
 // ── Broadcasting ──────────────────────────────────────────────────────
 
 function broadcast(event: string, data: unknown): void {
@@ -46,14 +42,6 @@ export function broadcastJobEvent(
   broadcast(type, job);
 }
 
-export function broadcastMemoryEvent(
-  type: "memory:created" | "memory:deleted",
-  data: unknown
-): void {
-  metricsDirty = true;
-  broadcast(type, data);
-}
-
 export function broadcastRepoEvent(
   type: "repo:tracked" | "repo:untracked" | "repo:scan-complete",
   data: unknown
@@ -68,10 +56,6 @@ export function broadcastPipelineEvent(
 ): void {
   metricsDirty = true;
   broadcast(type, data);
-}
-
-export function broadcastSearchEvent(data: unknown): void {
-  broadcast("search:executed", data);
 }
 
 // ── Periodic metrics push (dirty-flag gated) ──────────────────────────

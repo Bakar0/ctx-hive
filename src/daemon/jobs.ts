@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { z } from "zod";
 import { getDb } from "../db/connection.ts";
-import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
+import type { PipelineExecution } from "../pipeline/schema.ts";
 
 // ── Schemas & Types ──────────────────────────────────────────────────
 
@@ -69,25 +69,6 @@ export interface JobResult {
   outputTokens?: number;
   pipeline?: PipelineExecution;
 }
-
-export const RawJobFileSchema = z.object({
-  type: z.string().optional(),
-  createdAt: z.string().optional(),
-  sessionId: z.string().optional(),
-  cwd: z.string().optional(),
-  repoPath: z.string().optional(),
-  reason: z.string().optional(),
-  error: z.string().optional(),
-  failedAt: z.string().optional(),
-  startedAt: z.string().optional(),
-  completedAt: z.string().optional(),
-  durationMs: z.number().optional(),
-  transcriptTokens: z.number().optional(),
-  entriesCreated: z.number().optional(),
-  inputTokens: z.number().optional(),
-  outputTokens: z.number().optional(),
-  pipeline: PipelineExecutionSchema.optional(),
-}).passthrough();
 
 // ── Job I/O ──────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@ import { getDb, isSqliteVecAvailable } from "../db/connection.ts";
 import type { SearchResult, SearchFilters } from "./search.ts";
 import { ScopeSchema, TagsSchema } from "./store.ts";
 import type { EntryRow } from "./store.ts";
-import { getSignalScores, recordSearchHits } from "./signals.ts";
+import { getSignalScores } from "./signals.ts";
 import { generateEmbedding } from "./embeddings.ts";
 import { getVectorSearchConfig } from "./settings.ts";
 
@@ -20,15 +20,6 @@ export function syncEntryEmbedding(entryId: string, embedding: Float32Array): vo
     entryId,
     embedding,
   );
-}
-
-/**
- * Remove an entry's embedding from vec_entries.
- */
-export function removeEntryEmbedding(entryId: string): void {
-  if (!isSqliteVecAvailable()) return;
-  const db = getDb();
-  db.prepare("DELETE FROM vec_entries WHERE entry_id = ?").run(entryId);
 }
 
 /**
@@ -159,9 +150,6 @@ export async function vectorSearch(
   for (const r of results) {
     r.score = Math.round(Math.min(1, r.score / maxScore) * 100) / 100;
   }
-
-  // Record signal hits
-  recordSearchHits(results.map((r) => r.id));
 
   return results;
 }

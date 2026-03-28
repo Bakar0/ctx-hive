@@ -267,6 +267,3 @@ ${body}
 `;
 }
 
-export async function ensureCtxDir(): Promise<void> {
-  // No-op — DB handles storage now
-}

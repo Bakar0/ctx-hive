@@ -64,11 +64,3 @@ export const repoSyncPipeline: PipelineDef = {
   ],
 };
 
-// ── Pipeline registry ────────────────────────────────────────────────
-
-export const pipelineRegistry: Record<string, PipelineDef> = {
-  "session-mine": sessionMinePipeline,
-  "git-push": gitPushPipeline,
-  "git-pull": gitPullPipeline,
-  "repo-sync": repoSyncPipeline,
-};

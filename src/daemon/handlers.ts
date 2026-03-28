@@ -1,9 +1,9 @@
-import { basename } from "node:path";
 import { z } from "zod";
 import { executePipeline } from "../pipeline/executor.ts";
 import { readMessage, writeManifest } from "../pipeline/messages.ts";
 import { sessionMinePipeline, gitPushPipeline, gitPullPipeline, repoSyncPipeline } from "../pipeline/definitions.ts";
 import { broadcastPipelineEvent } from "./ws.ts";
+import { projectFromCwd } from "./api.ts";
 import type { Job, JobResult } from "./jobs.ts";
 import type { PipelineExecution } from "../pipeline/schema.ts";
 
@@ -63,13 +63,6 @@ export function getHandler(type: string): JobHandler | undefined {
   return handlers.get(type);
 }
 
-// ── Helper: project name from cwd ────────────────────────────────────
-
-function projectFromPath(path?: string): string {
-  if (path === undefined || path === "") return "unknown";
-  return basename(path);
-}
-
 // ── Helper: build job result from pipeline execution ─────────────────
 
 function buildJobResult(execution: PipelineExecution, extra: Partial<JobResult> = {}): JobResult {
@@ -126,7 +119,7 @@ async function handleSessionMine(job: Job, ctx: HandlerContext): Promise<JobResu
     sessionId: job.sessionId,
   }, {
     jobId: ctx.jobId,
-    project: projectFromPath(job.cwd),
+    project: projectFromCwd(job.cwd),
     signal: ctx.signal,
     ...buildPipelineCallbacks("session-mine"),
   });
@@ -155,7 +148,7 @@ async function handleGitChange(job: Job, ctx: HandlerContext): Promise<JobResult
     refs: job.type === "git-push" ? job.refs : undefined,
   }, {
     jobId: ctx.jobId,
-    project: projectFromPath(job.repoPath),
+    project: projectFromCwd(job.repoPath),
     signal: ctx.signal,
     ...buildPipelineCallbacks(job.type),
   });
@@ -174,7 +167,7 @@ async function handleRepoSync(job: Job, ctx: HandlerContext): Promise<JobResult>
     repoPath: job.repoPath,
   }, {
     jobId: ctx.jobId,
-    project: projectFromPath(job.repoPath),
+    project: projectFromCwd(job.repoPath),
     signal: ctx.signal,
     ...buildPipelineCallbacks("repo-sync"),
   });

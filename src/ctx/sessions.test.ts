@@ -3,7 +3,6 @@ import { rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import {
-  encodeSessionPath,
   repoToSessionDir,
   listSessionFiles,
   getSessionFilePaths,
@@ -13,18 +12,6 @@ const TEST_DIR = join(tmpdir(), `ctx-hive-sessions-test-${Date.now()}`);
 
 afterAll(async () => {
   await rm(TEST_DIR, { recursive: true, force: true });
-});
-
-// ── encodeSessionPath ──────────────────────────────────────────────────
-
-test("encodeSessionPath replaces slashes with dashes", () => {
-  expect(encodeSessionPath("/Users/foo/myrepo")).toBe("-Users-foo-myrepo");
-});
-
-test("encodeSessionPath handles current directory", () => {
-  const encoded = encodeSessionPath(".");
-  expect(encoded).not.toContain("/");
-  expect(encoded.startsWith("-")).toBe(true);
 });
 
 // ── repoToSessionDir ──────────────────────────────────────────────────

@@ -1,15 +1,10 @@
-import { join, basename } from "node:path";
-import { resolveRepoMeta, gatherRepoContext, buildRepoPrompt } from "../../ctx/init.ts";
-import { loadIndex, hiveRoot, type IndexEntry } from "../../ctx/store.ts";
+import { basename } from "node:path";
+import { resolveRepoMeta, gatherRepoContext, buildRepoPrompt, checkExistingMemories, findProjectOverview } from "../../ctx/init.ts";
+import { loadIndex, type IndexEntry } from "../../ctx/store.ts";
 import { runSingle } from "../../adapter/agent-runner.ts";
 import type { StageDef } from "../schema.ts";
 import type { RepoReplayOutput } from "./hippocampal-replay.ts";
-
-// ── Constants ────────────────────────────────────────────────────────
-
-const AGENT_MODEL = "sonnet";
-const AGENT_TOOLS = ["Bash", "Read", "Glob", "Grep"];
-const LOGS_DIR = join(hiveRoot(), "logs");
+import { AGENT_MODEL, AGENT_TOOLS, LOGS_DIR } from "./constants.ts";
 
 // ── Stage: Ingest ───────────────────────────────────────────────────
 
@@ -34,12 +29,8 @@ export const repoIngestStage: StageDef<RepoIngestInput, RepoIngestOutput> = {
     const meta = await resolveRepoMeta(repoPath);
     const repoContext = await gatherRepoContext(repoPath);
     const index = loadIndex();
-    const existing = index.filter(
-      (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
-    );
-    const overviewEntry = index.find(
-      (e) => e.project === meta.name && e.tags.includes("project-overview"),
-    ) ?? null;
+    const existing = checkExistingMemories(meta.name, index);
+    const overviewEntry = findProjectOverview(meta.name, index);
 
     ctx.setMetrics({ itemsProcessed: 1 });
 

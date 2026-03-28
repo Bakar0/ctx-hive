@@ -109,7 +109,7 @@ function openInTerminal(absPath: string): void {
   }
 }
 
-function projectFromCwd(cwd?: string): string {
+export function projectFromCwd(cwd?: string): string {
   if (cwd === undefined || cwd === "") return "unknown";
   return basename(cwd);
 }

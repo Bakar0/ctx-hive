@@ -5,12 +5,10 @@ import {
   type StageContext,
   type StageDef,
   type ExecutorOptions,
-  PipelineExecutionSchema,
 } from "./schema.ts";
 import {
   writeMessage,
   writeManifest,
-  readManifest,
 } from "./messages.ts";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -244,9 +242,3 @@ export async function executePipeline(
   }
 }
 
-// ── Read execution from manifest ─────────────────────────────────────
-
-export function loadExecution(executionId: string): PipelineExecution {
-  const manifest = readManifest(executionId);
-  return PipelineExecutionSchema.parse(manifest);
-}

@@ -1,5 +1,4 @@
 import {
-  ensureCtxDir,
   generateId,
   writeEntry,
   readEntry,
@@ -341,8 +340,6 @@ export async function ctx(args: string[]): Promise<void> {
     printCtxHelp();
     return;
   }
-
-  await ensureCtxDir();
 
   switch (subcommand) {
     case "add":

@@ -9,7 +9,6 @@ import {
   CTX_HIVE_MARKER_START,
   CTX_HIVE_MARKER_END,
   embedBinaryPath,
-  type GitHookName,
 } from "./git-scripts.ts";
 
 const GIT_HOOKS_DIR = join(hiveRoot(), "git-hooks");
@@ -146,28 +145,6 @@ export async function uninstallGitHooks(args: string[]): Promise<void> {
     await rm(GIT_HOOKS_DIR, { recursive: true, force: true });
     console.log(`Removed hooks directory: ${GIT_HOOKS_DIR}`);
   }
-}
-
-export async function checkGitHooksInstalled(): Promise<{
-  installed: boolean;
-  hooksPath: string | null;
-  missing: GitHookName[];
-}> {
-  const hooksPath = await getGlobalHooksPath();
-  const hookNames = HOOK_NAMES;
-  if (hooksPath !== GIT_HOOKS_DIR) {
-    return { installed: false, hooksPath, missing: hookNames };
-  }
-
-  const missing: GitHookName[] = [];
-  for (const hookName of hookNames) {
-    const hookFile = Bun.file(join(GIT_HOOKS_DIR, hookName));
-    if (!(await hookFile.exists())) {
-      missing.push(hookName);
-    }
-  }
-
-  return { installed: missing.length === 0, hooksPath, missing };
 }
 
 // ── Repo-local hook patching (for repos with local core.hooksPath, e.g. husky) ──

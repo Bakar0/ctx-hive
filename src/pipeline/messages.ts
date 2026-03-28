@@ -85,14 +85,17 @@ export function writeManifest(executionId: string, exec: PipelineExecution): voi
       exec.totalInputTokens ?? null, exec.totalOutputTokens ?? null,
       exec.totalCostUsd ?? null, exec.entriesCreated ?? null);
 
-    // Replace stages (delete + re-insert for simplicity)
-    db.prepare("DELETE FROM pipeline_stages WHERE execution_id = ?").run(exec.id);
-    const insertStage = db.prepare(`
+    // Upsert stages
+    const upsertStage = db.prepare(`
       INSERT INTO pipeline_stages (execution_id, name, status, started_at, completed_at, duration_ms, retry_count, error, metrics)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(execution_id, name) DO UPDATE SET
+        status = excluded.status, started_at = excluded.started_at, completed_at = excluded.completed_at,
+        duration_ms = excluded.duration_ms, retry_count = excluded.retry_count,
+        error = excluded.error, metrics = excluded.metrics
     `);
     for (const stage of exec.stages) {
-      insertStage.run(exec.id, stage.name, stage.status, stage.startedAt ?? null,
+      upsertStage.run(exec.id, stage.name, stage.status, stage.startedAt ?? null,
         stage.completedAt ?? null, stage.durationMs ?? null, stage.retryCount,
         stage.error ?? null, JSON.stringify(stage.metrics));
     }

@@ -336,16 +336,12 @@ export function findProjectOverview(
 
 // ── Prompt building ────────────────────────────────────────────────────
 
-function existingEntriesBlock(existing: IndexEntry[], isUpdate: boolean): string {
+function existingEntriesBlock(existing: IndexEntry[]): string {
   if (existing.length === 0) return "";
   const lines = existing.map(
     (e) => `- [${e.scope}] ${e.title} (id: ${e.id}, tags: ${e.tags.join(",")})`,
   );
-  return `\n## Existing Memory Entries (${existing.length})\n\n${lines.join("\n")}${
-    isUpdate
-      ? "\n\nThis is an UPDATE run. Review existing entries above. Delete outdated ones and add/update as needed."
-      : ""
-  }`;
+  return `\n## Existing Memory Entries (${existing.length})\n\n${lines.join("\n")}\n\nReview existing entries above to avoid duplicating existing knowledge. Do NOT delete or update existing entries — a separate maintenance step handles that.`;
 }
 
 function servedEntriesDedupBlock(servedEntries: ServedEntry[]): string {
@@ -425,7 +421,24 @@ Rating scale:
 - Start by reading the first ~200 and last ~100 lines of the session to understand its purpose, then evaluate each entry`;
 }
 
-function ctxAddInstructions(meta: RepoMeta, isUpdate: boolean): string {
+function ctxAddInstructions(meta: RepoMeta): string {
+  return `### How to add entries:
+For short entries:
+\`\`\`
+ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --body "Entry body content here"
+\`\`\`
+
+For longer entries, write the body to a temp file first:
+\`\`\`
+cat > /tmp/ctx-entry-body.txt << 'ENTRYEOF'
+Multi-line entry body content here.
+Can span multiple lines.
+ENTRYEOF
+ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --file /tmp/ctx-entry-body.txt
+\`\`\``;
+}
+
+function ctxMutateInstructions(meta: RepoMeta): string {
   return `### How to add entries:
 For short entries:
 \`\`\`
@@ -440,7 +453,11 @@ Can span multiple lines.
 ENTRYEOF
 ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --file /tmp/ctx-entry-body.txt
 \`\`\`
-${isUpdate ? "\nTo delete outdated entries:\n```\nctx-hive delete <id> --force\n```" : ""}`;
+
+### How to delete entries:
+\`\`\`
+ctx-hive delete <id> --force
+\`\`\``;
 }
 
 /**
@@ -451,7 +468,6 @@ export function buildRepoPrompt(
   meta: RepoMeta,
   repoContext: RepoContext,
   existing: IndexEntry[],
-  isUpdate: boolean,
   overviewEntry?: IndexEntry | null,
 ): string {
   const sections: string[] = [];
@@ -468,7 +484,7 @@ export function buildRepoPrompt(
     sections.push(`\n## CLAUDE.md\n\n${repoContext.claudeMd}`);
   }
 
-  sections.push(existingEntriesBlock(existing, isUpdate));
+  sections.push(existingEntriesBlock(existing));
 
   sections.push(`
 ## Instructions
@@ -528,7 +544,7 @@ For each insight, create a separate entry (scope: project, tags relevant to the 
 - For all entries, include --project "${meta.name}"
 - Don't duplicate what's in CLAUDE.md
 
-${ctxAddInstructions(meta, isUpdate)}
+${ctxAddInstructions(meta)}
 
 Now explore the repository, create the Project Overview, and generate insight entries if any. Start with Task 1.`);
 
@@ -547,7 +563,6 @@ export function buildSessionPrompt(
   meta: RepoMeta,
   sessionPaths: string[],
   existing: IndexEntry[],
-  isUpdate: boolean,
   servedEntries: ServedEntry[] = [],
 ): string {
   const fileList = sessionPaths.map((p) => `- ${p}`).join("\n");
@@ -581,7 +596,7 @@ Skip these:
 2. Look for sessions with debates, rejected approaches, or user-stated constraints
 3. For promising sessions, read more deeply to extract the key insights
 
-${existingEntriesBlock(existing, isUpdate)}
+${existingEntriesBlock(existing)}
 
 ## Extract ONLY these types of insights:
 
@@ -622,7 +637,7 @@ ${existingEntriesBlock(existing, isUpdate)}
 - If no sessions contain insights that pass the "Can't Derive From Code" test, generate 0 entries — that's fine
 - For project-scope entries, always include --project "${meta.name}"
 
-${ctxAddInstructions(meta, isUpdate)}
+${ctxAddInstructions(meta)}
 
 ${servedEntriesDedupBlock(servedEntries)}
 Now read the session files and generate memory entries. Remember: only things an AI couldn't figure out by reading the code.`;
@@ -640,7 +655,6 @@ export interface GitChangeDetails {
 export function buildGitChangePrompt(
   meta: RepoMeta,
   existing: IndexEntry[],
-  isUpdate: boolean,
   details: GitChangeDetails,
   overviewEntry?: IndexEntry | null,
 ): string {
@@ -712,9 +726,126 @@ Then create the new version with \`ctx-hive add\`.` : ""}
 - For the Recent Changes section, carry forward previous entries and add the new one at the top.
 - Always include --project "${meta.name}" and --tags "project-overview"
 
-${ctxAddInstructions(meta, isUpdate)}
+${ctxAddInstructions(meta)}
 
 Now analyze the changes and update the Project Overview if warranted.`;
+}
+
+// ── Hippocampal Replay prompt ──────────────────────────────────────────
+
+export interface ReplayContext {
+  type: "session" | "git-push" | "git-pull" | "repo-sync";
+  transcriptPaths?: string[];
+  changeDetails?: GitChangeDetails;
+  repoContext?: RepoContext;
+}
+
+/**
+ * Build prompt for the Hippocampal Replay agent.
+ * This agent reviews existing entries and maintains memory quality:
+ * delete outdated, update stale, merge duplicates.
+ */
+export function buildReplayPrompt(
+  meta: RepoMeta,
+  existing: IndexEntry[],
+  context: ReplayContext,
+): string {
+  const entryList = existing
+    .map((e) => `- id: ${e.id} | [${e.scope}] "${e.title}" (tags: ${e.tags.join(", ")})`)
+    .join("\n");
+
+  let contextSection = "";
+
+  if (context.type === "session" && context.transcriptPaths !== undefined && context.transcriptPaths.length > 0) {
+    const fileList = context.transcriptPaths.map((p) => `- ${p}`).join("\n");
+    contextSection = `## Session Context
+
+Read the session transcript to identify information that contradicts or supersedes existing entries.
+
+### Session files (JSONL format)
+${fileList}
+
+### JSONL format
+Each line is a JSON object. Relevant message types:
+- \`{"type": "human", "message": {"content": "..."}}\` — user messages
+- \`{"type": "assistant", "message": {"content": [...]}}\` — assistant messages (content is an array of blocks, look for \`type: "text"\`)
+
+### How to read sessions efficiently
+1. Read the first ~200 lines and last ~100 lines to understand what work was done
+2. Look for moments where existing knowledge was contradicted, corrected, or superseded`;
+  }
+
+  if ((context.type === "git-push" || context.type === "git-pull") && context.changeDetails !== undefined) {
+    const d = context.changeDetails;
+    const triggerLabel =
+      d.trigger === "push" ? "pushed commits" :
+      d.trigger === "pull-merge" ? "pulled changes (merge)" :
+      "pulled changes (rebase)";
+
+    contextSection = `## Git Change Context
+
+These ${triggerLabel} may have invalidated existing entries.
+
+### Commits
+${d.commitMessages || "(no commit messages available)"}
+
+### Changed files
+${d.changedFiles || "(no file list available)"}
+
+### Diff summary
+${d.diffSummary || "(no diff summary available)"}
+
+Look for entries that reference functions, files, or patterns that were changed or removed in these commits.`;
+  }
+
+  if (context.type === "repo-sync" && context.repoContext !== undefined) {
+    const rc = context.repoContext;
+    const parts: string[] = ["## Repository Context\n\nCompare existing entries against the current state of the repository."];
+    if (rc.readme !== "") parts.push(`### README.md\n\n${rc.readme}`);
+    if (rc.claudeMd !== "") parts.push(`### CLAUDE.md\n\n${rc.claudeMd}`);
+    contextSection = parts.join("\n\n");
+  }
+
+  return `# Hippocampal Replay: ${meta.name}
+
+You are the memory maintenance agent for "${meta.name}". Your ONLY job is to review existing entries and fix problems — like the brain's hippocampal replay mechanism that replays, strengthens, and prunes memories during sleep.
+
+## Existing Entries (${existing.length})
+
+${entryList}
+
+${contextSection}
+
+## Your Tasks
+
+Read each entry with \`ctx-hive show <id>\` before deciding its fate.
+
+### 1. Delete entries that are:
+- **Outdated** — superseded by code changes or newer information
+- **Wrong** — contain factual errors about the current codebase
+- **No longer relevant** — the feature, pattern, or constraint they describe was removed
+- **Low quality** — vague, unhelpful, or trivially derivable from reading the code
+
+### 2. Update entries that:
+- Have a **valid core insight** but contain incorrect details (wrong file paths, renamed functions, outdated API signatures)
+- Need **factual corrections** based on recent changes
+- To update: delete the old entry, then create a corrected version preserving the same scope and tags
+
+### 3. Merge entries that:
+- Cover the **same topic** with overlapping information
+- Would be **more useful as a single, consolidated entry**
+- To merge: delete the weaker/duplicate entries; optionally update the surviving entry to incorporate missing details
+
+## Rules
+- Read EVERY entry with \`ctx-hive show <id>\` before making decisions
+- Do NOT create brand new entries that capture new insights — that is the extractor's job
+- It is perfectly fine to make **0 changes** if all entries are current and valid
+- When in doubt, leave an entry alone — false positives are worse than stale entries
+- For all new entries created via update/merge, include --project "${meta.name}"
+
+${ctxMutateInstructions(meta)}
+
+Now review each entry and maintain memory quality.`;
 }
 
 // ── Process a single repo ──────────────────────────────────────────────
@@ -765,9 +896,9 @@ async function processRepo(
   }
 
   // 5. Build prompts
-  const repoPrompt = buildRepoPrompt(meta, repoContext, existing, isUpdate, overviewEntry);
+  const repoPrompt = buildRepoPrompt(meta, repoContext, existing, overviewEntry);
   const sessionPrompt = !noSessions && sessionPaths.length > 0
-    ? buildSessionPrompt(meta, sessionPaths, existing, isUpdate)
+    ? buildSessionPrompt(meta, sessionPaths, existing)
     : null;
 
   // 6. Dry run — print both prompts and return

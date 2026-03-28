@@ -4,6 +4,7 @@ import { loadIndex, hiveRoot, type IndexEntry } from "../../ctx/store.ts";
 import { runSingle } from "../../adapter/agent-runner.ts";
 import { runGit } from "../../git/run.ts";
 import type { StageDef } from "../schema.ts";
+import type { GitReplayOutput } from "./hippocampal-replay.ts";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -26,7 +27,6 @@ export interface GitIngestOutput {
   meta: { name: string; org: string; remoteUrl: string };
   index: IndexEntry[];
   existing: IndexEntry[];
-  isUpdate: boolean;
   overviewEntry: IndexEntry | null;
   changeDetails: GitChangeDetails;
 }
@@ -41,7 +41,6 @@ export const gitIngestStage: StageDef<GitIngestInput, GitIngestOutput> = {
     const existing = index.filter(
       (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
     );
-    const isUpdate = existing.length > 0;
     const overviewEntry = index.find(
       (e) => e.project === meta.name && e.tags.includes("project-overview"),
     ) ?? null;
@@ -73,7 +72,6 @@ export const gitIngestStage: StageDef<GitIngestInput, GitIngestOutput> = {
       meta,
       index,
       existing,
-      isUpdate,
       overviewEntry,
       changeDetails: {
         trigger,
@@ -110,6 +108,11 @@ export interface GitExtractOutput {
   entriesCreated: number;
   inputTokens: number | undefined;
   outputTokens: number | undefined;
+  // Passthrough for downstream hippocampal-replay stage
+  meta: { name: string; org: string; remoteUrl: string };
+  repoPath: string;
+  changeDetails: GitChangeDetails;
+  existingCount: number;
 }
 
 export const gitExtractStage: StageDef<GitIngestOutput, GitExtractOutput> = {
@@ -122,9 +125,9 @@ export const gitExtractStage: StageDef<GitIngestOutput, GitExtractOutput> = {
     return Boolean(d.commitMessages || d.changedFiles);
   },
   async run(input, ctx) {
-    const { meta, existing, isUpdate, overviewEntry, changeDetails, repoPath, index } = input;
+    const { meta, existing, overviewEntry, changeDetails, repoPath, index } = input;
 
-    const prompt = buildGitChangePrompt(meta, existing, isUpdate, changeDetails, overviewEntry);
+    const prompt = buildGitChangePrompt(meta, existing, changeDetails, overviewEntry);
     const countBefore = index.length;
 
     const result = await runSingle({
@@ -160,6 +163,10 @@ export const gitExtractStage: StageDef<GitIngestOutput, GitExtractOutput> = {
       entriesCreated,
       inputTokens: taskResult?.inputTokens,
       outputTokens: taskResult?.outputTokens,
+      meta: input.meta,
+      repoPath,
+      changeDetails,
+      existingCount: input.existing.length,
     };
   },
 };
@@ -169,19 +176,23 @@ export const gitExtractStage: StageDef<GitIngestOutput, GitExtractOutput> = {
 export interface GitSummarizeOutput {
   success: boolean;
   entriesCreated: number;
+  entriesDeleted: number;
+  entriesUpdated: number;
   inputTokens: number;
   outputTokens: number;
 }
 
-export const gitSummarizeStage: StageDef<GitExtractOutput, GitSummarizeOutput> = {
+export const gitSummarizeStage: StageDef<GitReplayOutput, GitSummarizeOutput> = {
   name: "summarize",
   async run(input, ctx) {
     ctx.setMetrics({ itemsProcessed: input.entriesCreated });
     return {
       success: input.success,
       entriesCreated: input.entriesCreated,
-      inputTokens: input.inputTokens ?? 0,
-      outputTokens: input.outputTokens ?? 0,
+      entriesDeleted: input.entriesDeleted,
+      entriesUpdated: input.entriesUpdated,
+      inputTokens: (input.extractInputTokens ?? 0) + (input.inputTokens ?? 0),
+      outputTokens: (input.extractOutputTokens ?? 0) + (input.outputTokens ?? 0),
     };
   },
 };

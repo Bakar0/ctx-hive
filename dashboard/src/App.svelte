@@ -4,6 +4,7 @@
   import Memories from "./pages/Memories.svelte";
   import Repos from "./pages/Repos.svelte";
   import Search from "./pages/Search.svelte";
+  import Settings from "./pages/Settings.svelte";
   import { DashboardSocket } from "./state/socket.svelte.ts";
   import { repoStore } from "./state/repos.svelte.ts";
   import * as api from "./api/client";
@@ -64,6 +65,8 @@
       <Repos />
     {:else if page === "search"}
       <Search bind:this={searchRef} />
+    {:else if page === "settings"}
+      <Settings />
     {/if}
   </main>
 </div>

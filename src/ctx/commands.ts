@@ -13,7 +13,7 @@ import {
   SCOPES,
   isScope,
 } from "./store.ts";
-import { search, formatHuman, formatJson, formatMarkdown } from "./search.ts";
+import { searchMulti, formatHuman, formatJson, formatMarkdown } from "./search.ts";
 import { ctxInit } from "./init.ts";
 import { recordEvaluation, type RelevanceEval } from "./signals.ts";
 import { tmpdir } from "node:os";
@@ -159,14 +159,14 @@ async function ctxSearch(args: string[]): Promise<void> {
   const limit = parseInt(getFlag(args, "--limit") ?? "10", 10);
   const format = getFlag(args, "--format") ?? "human";
 
-  const results = search(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit, { source: "cli" });
+  const { merged } = await searchMulti(query, { scope, tags: tags.length > 0 ? tags : undefined, project }, limit, { source: "cli" });
 
   if (format === "json") {
-    console.log(formatJson(results, query));
+    console.log(formatJson(merged, query));
   } else if (format === "markdown") {
-    console.log(formatMarkdown(results));
+    console.log(formatMarkdown(merged));
   } else {
-    console.log(formatHuman(results));
+    console.log(formatHuman(merged));
   }
 }
 

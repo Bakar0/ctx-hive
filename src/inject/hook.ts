@@ -6,14 +6,14 @@
 import { basename, join } from "node:path";
 import { appendFile } from "node:fs/promises";
 import { z } from "zod";
-import { search, tokenize, type SearchResult } from "../ctx/search.ts";
+import { tokenize } from "../ctx/search.ts";
 import { hiveRoot } from "../ctx/store.ts";
 
 // ── Constants ──────────────────────────────────────────────────────────
 
 const DEFAULT_DAEMON_PORT = 3939;
-const DAEMON_TIMEOUT_MS = 1500;
-const HARD_TIMEOUT_MS = 2000;
+const DAEMON_TIMEOUT_MS = 3000;
+const HARD_TIMEOUT_MS = 4000;
 const MAX_RESULTS = 5;
 const MIN_SCORE_THRESHOLD = 0.2;
 const MIN_QUERY_TOKENS = 3;
@@ -80,9 +80,22 @@ const HookPayloadSchema = z.object({
   prompt: z.string(),
 }).passthrough();
 
+// ── Result type for daemon response ────────────────────────────────────
+
+interface InjectResult {
+  id: string;
+  title: string;
+  scope: string;
+  tags: string[];
+  project: string;
+  tokens: number;
+  score: number;
+  excerpt: string;
+}
+
 // ── Formatting ─────────────────────────────────────────────────────────
 
-function formatInjectResult(results: SearchResult[]): string {
+function formatInjectResult(results: InjectResult[]): string {
   if (results.length === 0) return "";
 
   const entries = results.map((r) => {
@@ -112,48 +125,45 @@ async function getDaemonUrl(): Promise<string> {
   return `http://localhost:${String(DEFAULT_DAEMON_PORT)}`;
 }
 
-// ── Daemon search (fast path) ──────────────────────────────────────────
+// ── Daemon search ─────────────────────────────────────────────────────
 
-async function tryDaemonSearch(
+const DaemonSearchResultSchema = z.object({
+  merged: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    scope: z.enum(["project", "org", "personal"]),
+    tags: z.array(z.string()),
+    project: z.string(),
+    created: z.string(),
+    updated: z.string(),
+    tokens: z.number().optional().default(0),
+    path: z.string(),
+    score: z.number(),
+    excerpt: z.string(),
+  })),
+});
+
+async function daemonSearch(
   query: string,
   project?: string,
   sessionId?: string,
-): Promise<SearchResult[] | null> {
-  try {
-    const params = new URLSearchParams({ q: query, limit: String(MAX_RESULTS), source: "inject" });
-    if (project !== undefined && project !== "") params.set("project", project);
-    if (sessionId !== undefined && sessionId !== "") params.set("sessionId", sessionId);
+): Promise<InjectResult[]> {
+  const params = new URLSearchParams({ q: query, limit: String(MAX_RESULTS), source: "inject" });
+  if (project !== undefined && project !== "") params.set("project", project);
+  if (sessionId !== undefined && sessionId !== "") params.set("sessionId", sessionId);
 
-    const daemonUrl = await getDaemonUrl();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), DAEMON_TIMEOUT_MS);
+  const daemonUrl = await getDaemonUrl();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DAEMON_TIMEOUT_MS);
 
-    const resp = await fetch(`${daemonUrl}/api/search?${params.toString()}`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
+  const resp = await fetch(`${daemonUrl}/api/search?${params.toString()}`, {
+    signal: controller.signal,
+  });
+  clearTimeout(timeout);
 
-    if (!resp.ok) return null;
-    const DaemonSearchResultSchema = z.object({
-      results: z.array(z.object({
-        id: z.string(),
-        title: z.string(),
-        scope: z.enum(["project", "org", "personal"]),
-        tags: z.array(z.string()),
-        project: z.string(),
-        created: z.string(),
-        updated: z.string(),
-        tokens: z.number().optional().default(0),
-        path: z.string(),
-        score: z.number(),
-        excerpt: z.string(),
-      })),
-    });
-    const data = DaemonSearchResultSchema.parse(await resp.json());
-    return data.results;
-  } catch {
-    return null;
-  }
+  if (!resp.ok) return [];
+  const data = DaemonSearchResultSchema.parse(await resp.json());
+  return data.merged;
 }
 
 // ── Main handler ───────────────────────────────────────────────────────
@@ -165,6 +175,12 @@ export async function handleInject(): Promise<void> {
   }, HARD_TIMEOUT_MS);
 
   try {
+    // Skip injection for ctx-hive's own pipeline agents
+    if (process.env.CTX_HIVE_PIPELINE === "1") {
+      console.log("{}");
+      return;
+    }
+
     // Read stdin using Bun.file(0) which handles EOF better in compiled binaries
     const raw = await Bun.file("/dev/stdin").text().then((s) => s.trim());
 
@@ -199,14 +215,7 @@ export async function handleInject(): Promise<void> {
     const project = payload.cwd !== undefined && payload.cwd !== "" ? basename(payload.cwd) : undefined;
     const sessionId = payload.session_id;
 
-    // Try daemon first, fall back to direct search
-    let results = await tryDaemonSearch(promptText, project, sessionId);
-    results ??= search(promptText, { project }, MAX_RESULTS, {
-      source: "inject",
-      project,
-      cwd: payload.cwd,
-      sessionId,
-    });
+    let results = await daemonSearch(promptText, project, sessionId);
 
     // Filter by minimum score threshold
     results = results.filter((r) => r.score >= MIN_SCORE_THRESHOLD);

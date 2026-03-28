@@ -3,6 +3,7 @@
   import * as api from "../api/client";
   import Badge from "../components/Badge.svelte";
   import MemoryDetail from "../components/MemoryDetail.svelte";
+  import { STAGE_LABELS } from "./stage-labels.ts";
   import { formatDuration, timeAgo } from "../format/time";
   import { renderMarkdown } from "../format/markdown";
 
@@ -11,6 +12,7 @@
     prepare: "Serve relevant memory entries to the session",
     extract: "Run AI agent to extract knowledge entries",
     evaluate: "Score relevance of served memory entries",
+    "hippocampal-replay": "Replay existing memories — update stale, remove outdated, merge duplicates",
     summarize: "Aggregate results and finalize metrics",
   };
 
@@ -120,8 +122,17 @@
       if (typeof d.costUsd === "number") fields.push({ label: "Cost", value: `$${d.costUsd.toFixed(4)}`, type: "number" });
     }
 
+    if (stage.name === "hippocampal-replay") {
+      if (typeof d.entriesDeleted === "number") fields.push({ label: "Entries Deleted", value: String(d.entriesDeleted), type: "number" });
+      if (typeof d.entriesUpdated === "number") fields.push({ label: "Entries Updated", value: String(d.entriesUpdated), type: "number" });
+      if (typeof d.resultText === "string" && d.resultText.length > 0) fields.push({ label: "Agent Output", value: d.resultText, type: "markdown" });
+      if (typeof d.costUsd === "number") fields.push({ label: "Cost", value: `$${d.costUsd.toFixed(4)}`, type: "number" });
+    }
+
     if (stage.name === "summarize") {
       if (typeof d.entriesCreated === "number") fields.push({ label: "Entries Created", value: String(d.entriesCreated), type: "number" });
+      if (typeof d.entriesDeleted === "number" && d.entriesDeleted > 0) fields.push({ label: "Entries Deleted", value: String(d.entriesDeleted), type: "number" });
+      if (typeof d.entriesUpdated === "number" && d.entriesUpdated > 0) fields.push({ label: "Entries Updated", value: String(d.entriesUpdated), type: "number" });
       if (typeof d.inputTokens === "number") fields.push({ label: "Total Input Tokens", value: d.inputTokens.toLocaleString(), type: "number" });
       if (typeof d.outputTokens === "number") fields.push({ label: "Total Output Tokens", value: d.outputTokens.toLocaleString(), type: "number" });
     }
@@ -135,7 +146,7 @@
 
 <div class="rounded-lg border border-border bg-card p-4 mt-4">
   <div class="flex items-center gap-2 mb-3">
-    <span class="text-sm font-semibold">{stage.name}</span>
+    <span class="text-sm font-semibold">{STAGE_LABELS[stage.name] ?? stage.name}</span>
     <Badge variant={badgeVariant(stage.status)} label={stage.status} />
     {#if stage.retryCount > 0}
       <span class="text-xs text-muted-foreground">retry #{stage.retryCount}</span>

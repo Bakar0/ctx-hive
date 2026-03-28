@@ -123,7 +123,6 @@ test("buildRepoPrompt includes repo metadata", () => {
     { name: "my-app", org: "acme", remoteUrl: "git@github.com:acme/my-app.git" },
     { readme: "# My App", claudeMd: "" },
     [],
-    false,
   );
 
   expect(prompt).toContain("my-app");
@@ -133,7 +132,7 @@ test("buildRepoPrompt includes repo metadata", () => {
   expect(prompt).toContain("Repo Analyzer");
 });
 
-test("buildRepoPrompt includes existing entries in update mode", () => {
+test("buildRepoPrompt includes existing entries", () => {
   const existing = [
     {
       id: "abc12345",
@@ -152,13 +151,11 @@ test("buildRepoPrompt includes existing entries in update mode", () => {
     { name: "my-app", org: "acme", remoteUrl: "" },
     { readme: "", claudeMd: "" },
     existing,
-    true,
   );
 
   expect(prompt).toContain("Existing Memory Entries (1)");
   expect(prompt).toContain("Auth patterns");
-  expect(prompt).toContain("UPDATE run");
-  expect(prompt).toContain("ctx-hive delete");
+  expect(prompt).toContain("Do NOT delete or update existing entries");
 });
 
 test("buildRepoPrompt includes project name in add instructions", () => {
@@ -166,7 +163,6 @@ test("buildRepoPrompt includes project name in add instructions", () => {
     { name: "backend-api", org: "acme", remoteUrl: "" },
     { readme: "", claudeMd: "" },
     [],
-    false,
   );
 
   expect(prompt).toContain('--project "backend-api"');
@@ -181,7 +177,6 @@ test("buildSessionPrompt includes session file paths", () => {
     { name: "my-app", org: "", remoteUrl: "" },
     paths,
     [],
-    false,
   );
 
   expect(prompt).toContain("Session Miner");
@@ -195,7 +190,6 @@ test("buildSessionPrompt includes instructions for reading sessions", () => {
     { name: "my-app", org: "", remoteUrl: "" },
     ["/tmp/session.jsonl"],
     [],
-    false,
   );
 
   expect(prompt).toContain("Rejected alternatives");
@@ -204,7 +198,7 @@ test("buildSessionPrompt includes instructions for reading sessions", () => {
   expect(prompt).toContain("first ~200 lines");
 });
 
-test("buildSessionPrompt includes existing entries in update mode", () => {
+test("buildSessionPrompt includes existing entries with dedup note", () => {
   const existing = [
     {
       id: "abc12345",
@@ -223,9 +217,8 @@ test("buildSessionPrompt includes existing entries in update mode", () => {
     { name: "my-app", org: "", remoteUrl: "" },
     ["/tmp/session.jsonl"],
     existing,
-    true,
   );
 
   expect(prompt).toContain("Existing Memory Entries (1)");
-  expect(prompt).toContain("UPDATE run");
+  expect(prompt).toContain("Do NOT delete or update existing entries");
 });

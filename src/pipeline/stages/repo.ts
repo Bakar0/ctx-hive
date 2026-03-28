@@ -3,6 +3,7 @@ import { resolveRepoMeta, gatherRepoContext, buildRepoPrompt } from "../../ctx/i
 import { loadIndex, hiveRoot, type IndexEntry } from "../../ctx/store.ts";
 import { runSingle } from "../../adapter/agent-runner.ts";
 import type { StageDef } from "../schema.ts";
+import type { RepoReplayOutput } from "./hippocampal-replay.ts";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -22,7 +23,6 @@ export interface RepoIngestOutput {
   repoContext: { readme: string; claudeMd: string };
   index: IndexEntry[];
   existing: IndexEntry[];
-  isUpdate: boolean;
   overviewEntry: IndexEntry | null;
 }
 
@@ -37,14 +37,13 @@ export const repoIngestStage: StageDef<RepoIngestInput, RepoIngestOutput> = {
     const existing = index.filter(
       (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
     );
-    const isUpdate = existing.length > 0;
     const overviewEntry = index.find(
       (e) => e.project === meta.name && e.tags.includes("project-overview"),
     ) ?? null;
 
     ctx.setMetrics({ itemsProcessed: 1 });
 
-    return { repoPath, meta, repoContext, index, existing, isUpdate, overviewEntry };
+    return { repoPath, meta, repoContext, index, existing, overviewEntry };
   },
 };
 
@@ -75,6 +74,11 @@ export interface RepoExtractOutput {
   costUsd: number;
   inputTokens: number | undefined;
   outputTokens: number | undefined;
+  // Passthrough for downstream hippocampal-replay stage
+  meta: { name: string; org: string; remoteUrl: string };
+  repoPath: string;
+  repoContext: { readme: string; claudeMd: string };
+  existingCount: number;
 }
 
 export const repoExtractStage: StageDef<RepoIngestOutput, RepoExtractOutput> = {
@@ -82,9 +86,9 @@ export const repoExtractStage: StageDef<RepoIngestOutput, RepoExtractOutput> = {
   retries: 1,
   retryDelayMs: 30_000,
   async run(input, ctx) {
-    const { meta, repoContext, existing, isUpdate, overviewEntry, repoPath, index } = input;
+    const { meta, repoContext, existing, overviewEntry, repoPath, index } = input;
 
-    const prompt = buildRepoPrompt(meta, repoContext, existing, isUpdate, overviewEntry);
+    const prompt = buildRepoPrompt(meta, repoContext, existing, overviewEntry);
     const idsBefore = new Set(index.map((e) => e.id));
 
     const result = await runSingle({
@@ -126,6 +130,10 @@ export const repoExtractStage: StageDef<RepoIngestOutput, RepoExtractOutput> = {
       costUsd: taskResult?.cost_usd ?? 0,
       inputTokens: taskResult?.inputTokens,
       outputTokens: taskResult?.outputTokens,
+      meta,
+      repoPath,
+      repoContext,
+      existingCount: existing.length,
     };
   },
 };
@@ -135,19 +143,23 @@ export const repoExtractStage: StageDef<RepoIngestOutput, RepoExtractOutput> = {
 export interface RepoSummarizeOutput {
   success: boolean;
   entriesCreated: number;
+  entriesDeleted: number;
+  entriesUpdated: number;
   inputTokens: number;
   outputTokens: number;
 }
 
-export const repoSummarizeStage: StageDef<RepoExtractOutput, RepoSummarizeOutput> = {
+export const repoSummarizeStage: StageDef<RepoReplayOutput, RepoSummarizeOutput> = {
   name: "summarize",
   async run(input, ctx) {
     ctx.setMetrics({ itemsProcessed: input.entriesCreated });
     return {
       success: input.success,
       entriesCreated: input.entriesCreated,
-      inputTokens: input.inputTokens ?? 0,
-      outputTokens: input.outputTokens ?? 0,
+      entriesDeleted: input.entriesDeleted,
+      entriesUpdated: input.entriesUpdated,
+      inputTokens: (input.extractInputTokens ?? 0) + (input.inputTokens ?? 0),
+      outputTokens: (input.extractOutputTokens ?? 0) + (input.outputTokens ?? 0),
     };
   },
 };

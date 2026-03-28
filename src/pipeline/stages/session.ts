@@ -56,7 +56,6 @@ export interface SessionIngestOutput {
   meta: { name: string; org: string; remoteUrl: string };
   index: IndexEntry[];
   existing: IndexEntry[];
-  isUpdate: boolean;
   servedEntries: ServedEntry[];
   transcriptTokens: number | undefined;
 }
@@ -72,8 +71,6 @@ export const sessionIngestStage: StageDef<SessionIngestInput, SessionIngestOutpu
     const existing = index.filter(
       (e) => e.project === meta.name || e.title.toLowerCase().includes(meta.name.toLowerCase()),
     );
-    const isUpdate = existing.length > 0;
-
     // Find served entries from search history
     const historyEntries = getSessionEntries(sessionId);
     const servedEntries: ServedEntry[] = historyEntries
@@ -92,7 +89,6 @@ export const sessionIngestStage: StageDef<SessionIngestInput, SessionIngestOutpu
       meta,
       index,
       existing,
-      isUpdate,
       servedEntries,
       transcriptTokens,
     };
@@ -132,6 +128,11 @@ export interface SessionExtractOutput {
   inputTokens: number | undefined;
   outputTokens: number | undefined;
   indexBeforeCount: number;
+  // Passthrough for downstream hippocampal-replay stage
+  meta: { name: string; org: string; remoteUrl: string };
+  cwd: string;
+  transcriptPath: string;
+  existingCount: number;
 }
 
 export const sessionExtractStage: StageDef<SessionIngestOutput & PrepareOutput, SessionExtractOutput> = {
@@ -143,7 +144,6 @@ export const sessionExtractStage: StageDef<SessionIngestOutput & PrepareOutput, 
       input.meta,
       [input.transcriptPath],
       input.existing,
-      input.isUpdate,
       input.servedEntries,
     );
 
@@ -184,6 +184,10 @@ export const sessionExtractStage: StageDef<SessionIngestOutput & PrepareOutput, 
       inputTokens: taskResult?.inputTokens,
       outputTokens: taskResult?.outputTokens,
       indexBeforeCount: input.index.length,
+      meta: input.meta,
+      cwd: input.cwd,
+      transcriptPath: input.transcriptPath,
+      existingCount: input.existing.length,
     };
   },
 };
@@ -246,12 +250,20 @@ export const evaluationStage: StageDef<SessionIngestOutput & PrepareOutput, Eval
 export interface SummarizeInput {
   extract: SessionExtractOutput;
   evaluate: EvaluationOutput | SessionIngestOutput; // evaluate may be skipped (pass-through)
+  // Replay metrics (hippocampal-replay stage)
+  entriesDeleted: number;
+  entriesUpdated: number;
+  costUsd: number;
+  inputTokens: number | undefined;
+  outputTokens: number | undefined;
 }
 
 export interface SummarizeOutput {
   success: boolean;
   durationMs: number;
   entriesCreated: number;
+  entriesDeleted: number;
+  entriesUpdated: number;
   inputTokens: number;
   outputTokens: number;
   transcriptTokens: number | undefined;
@@ -266,7 +278,7 @@ export const summarizeStage: StageDef<SummarizeInput, SummarizeOutput> = {
     const currentIndex = loadIndex();
     const entriesCreated = Math.max(0, currentIndex.length - extractResult.indexBeforeCount);
 
-    // Aggregate tokens from extraction and evaluation
+    // Aggregate tokens from extraction, evaluation, and replay
     let inputTokens = extractResult.inputTokens ?? 0;
     let outputTokens = extractResult.outputTokens ?? 0;
 
@@ -276,12 +288,18 @@ export const summarizeStage: StageDef<SummarizeInput, SummarizeOutput> = {
       outputTokens += evalResult.outputTokens ?? 0;
     }
 
+    // Add replay stage tokens
+    inputTokens += input.inputTokens ?? 0;
+    outputTokens += input.outputTokens ?? 0;
+
     ctx.setMetrics({ itemsProcessed: entriesCreated });
 
     return {
       success: true,
       durationMs: 0, // will be set by executor
       entriesCreated,
+      entriesDeleted: input.entriesDeleted,
+      entriesUpdated: input.entriesUpdated,
       inputTokens,
       outputTokens,
       transcriptTokens: undefined,

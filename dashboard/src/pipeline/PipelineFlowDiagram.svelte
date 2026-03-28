@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PipelineExecution, StageExecution } from "../api/types";
+  import { STAGE_LABELS } from "./stage-labels.ts";
   import { formatDuration } from "../format/time";
 
   interface Props {
@@ -18,25 +19,28 @@
   }
 
   const SESSION_NODES: NodePos[] = [
-    { name: "ingest", label: "Ingest", x: 100, y: 90 },
-    { name: "prepare", label: "Prepare", x: 280, y: 90 },
-    { name: "extract", label: "Extract", x: 480, y: 50 },
-    { name: "evaluate", label: "Evaluate", x: 480, y: 130 },
-    { name: "summarize", label: "Summarize", x: 640, y: 90 },
+    { name: "ingest", label: STAGE_LABELS["ingest"]!, x: 90, y: 90 },
+    { name: "prepare", label: STAGE_LABELS["prepare"]!, x: 260, y: 90 },
+    { name: "extract", label: STAGE_LABELS["extract"]!, x: 450, y: 50 },
+    { name: "evaluate", label: STAGE_LABELS["evaluate"]!, x: 450, y: 130 },
+    { name: "hippocampal-replay", label: STAGE_LABELS["hippocampal-replay"]!, x: 650, y: 90 },
+    { name: "summarize", label: STAGE_LABELS["summarize"]!, x: 840, y: 90 },
   ];
 
   const GIT_NODES: NodePos[] = [
-    { name: "ingest", label: "Ingest", x: 100, y: 90 },
-    { name: "prepare", label: "Prepare", x: 280, y: 90 },
-    { name: "extract", label: "Extract", x: 460, y: 90 },
-    { name: "summarize", label: "Summarize", x: 640, y: 90 },
+    { name: "ingest", label: STAGE_LABELS["ingest"]!, x: 90, y: 90 },
+    { name: "prepare", label: STAGE_LABELS["prepare"]!, x: 270, y: 90 },
+    { name: "extract", label: STAGE_LABELS["extract"]!, x: 460, y: 90 },
+    { name: "hippocampal-replay", label: STAGE_LABELS["hippocampal-replay"]!, x: 660, y: 90 },
+    { name: "summarize", label: STAGE_LABELS["summarize"]!, x: 840, y: 90 },
   ];
 
   const REPO_NODES: NodePos[] = [
-    { name: "ingest", label: "Ingest", x: 100, y: 90 },
-    { name: "prepare", label: "Prepare", x: 280, y: 90 },
-    { name: "extract", label: "Extract", x: 460, y: 90 },
-    { name: "summarize", label: "Summarize", x: 640, y: 90 },
+    { name: "ingest", label: STAGE_LABELS["ingest"]!, x: 90, y: 90 },
+    { name: "prepare", label: STAGE_LABELS["prepare"]!, x: 270, y: 90 },
+    { name: "extract", label: STAGE_LABELS["extract"]!, x: 460, y: 90 },
+    { name: "hippocampal-replay", label: STAGE_LABELS["hippocampal-replay"]!, x: 660, y: 90 },
+    { name: "summarize", label: STAGE_LABELS["summarize"]!, x: 840, y: 90 },
   ];
 
   let nodes = $derived.by(() => {
@@ -58,14 +62,15 @@
         { from: "ingest", to: "prepare" },
         { from: "prepare", to: "extract" },
         { from: "prepare", to: "evaluate" },
-        { from: "extract", to: "summarize" },
-        { from: "evaluate", to: "summarize" },
+        { from: "extract", to: "hippocampal-replay" },
+        { from: "evaluate", to: "hippocampal-replay" },
+        { from: "hippocampal-replay", to: "summarize" },
       ];
     }
     return nodes.slice(0, -1).map((_, i) => ({ from: nodes[i]!.name, to: nodes[i + 1]!.name }));
   });
 
-  const NODE_W = 130;
+  const NODE_W = 155;
   const NODE_H = 44;
   const NODE_RX = 8;
 
@@ -109,7 +114,7 @@
 </script>
 
 {#if pipeline}
-  <svg viewBox="0 0 740 180" class="w-full rounded-lg border border-border bg-card" preserveAspectRatio="xMidYMid meet">
+  <svg viewBox="0 0 930 180" class="w-full rounded-lg border border-border bg-card" preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="arrow" viewBox="0 0 10 7" refX="10" refY="3.5" markerWidth="8" markerHeight="6" orient="auto-start-reverse">
         <polygon points="0 0, 10 3.5, 0 7" fill="var(--muted-foreground)" opacity="0.5" />

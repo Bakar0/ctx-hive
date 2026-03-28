@@ -2,6 +2,7 @@
   import type { PipelineStats } from "../api/types";
   import BarChart from "../charts/BarChart.svelte";
   import StatCard from "../components/StatCard.svelte";
+  import { STAGE_LABELS } from "./stage-labels.ts";
   import { formatDuration } from "../format/time";
 
   interface Props {
@@ -13,7 +14,7 @@
   let durationBars = $derived.by(() => {
     if (!stats) return [];
     return Object.entries(stats.avgStageDurations)
-      .map(([name, ms]) => ({ label: name, value: Math.round(ms / 1000) }))
+      .map(([name, ms]) => ({ label: STAGE_LABELS[name] ?? name, value: Math.round(ms / 1000) }))
       .sort((a, b) => b.value - a.value);
   });
 
@@ -49,7 +50,7 @@
         <div class="space-y-2">
           {#each Object.entries(stats.stageFailureRates) as [name, rate]}
             <div class="flex items-center gap-2">
-              <span class="text-xs w-16 text-right font-mono">{name}</span>
+              <span class="text-xs w-28 text-right font-mono">{STAGE_LABELS[name] ?? name}</span>
               <div class="flex-1 h-2 bg-muted rounded-full overflow-hidden">
                 <div
                   class="h-full rounded-full"

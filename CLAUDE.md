@@ -34,20 +34,24 @@ bun run deploy                    # Build + copy to ~/.local/bin/
 - Entries are Markdown files with YAML frontmatter under `~/.ctx-hive/entries/{scope}/` (scopes: `project`, `org`, `personal`).
 - Frontmatter fields: `id`, `title`, `scope`, `tags`, `project`, `created`, `updated`.
 - SQLite database at `~/.ctx-hive/ctx-hive.db` stores jobs, pipeline executions, search history, and the entry search index (FTS5).
-- Job types are zod discriminated unions: `session-mine`, `git-push`, `git-pull`, `repo-sync`.
+- Job types are zod discriminated unions: `session-mine`, `git-change` (legacy: `git-push`, `git-pull`, `repo-sync`).
+- Bare clones and worktrees for tracked repos live under `~/.ctx-hive/repos/<repoId>/` (managed by `src/repo/clone.ts`).
 
 ## Database
 
 - `bun:sqlite` for all database access — don't use better-sqlite3 or other wrappers.
 - Connection singleton in `src/db/connection.ts` (WAL mode, 5s busy timeout, foreign keys on).
-- Migrations in `src/db/migrate.ts`. Tables: `entries`, `jobs`, `pipeline_executions`, `pipeline_stages`, `pipeline_messages`, `search_history`.
+- Migrations in `src/db/migrate.ts`. Tables: `entries`, `jobs`, `pipeline_executions`, `pipeline_stages`, `pipeline_messages`, `search_history`, `branch_watches`.
 - FTS5 virtual table `entries_fts` for full-text search on entries.
 
 ## Pipeline system
 
-- Four pipelines defined in `src/pipeline/definitions.ts`: `session-mine`, `git-push`, `git-pull`, `repo-sync`.
+- Three pipelines defined in `src/pipeline/definitions.ts`: `session-mine`, `git-change`, plus legacy `git-push`/`git-pull`.
+- Git change detection uses bare clones + remote branch polling (`src/daemon/branch-watcher.ts`). The daemon fetches tracked repos every 60s.
+- Agents run with `cwd` = worktree (clean branch state from bare clone), not the user's working copy.
+- Unified extract agent handles both first-scan and incremental changes via `buildUnifiedExtractPrompt` in `src/ctx/init.ts`.
 - Stage definitions implement `StageDef` interface from `src/pipeline/schema.ts`.
-- Stages grouped by domain in `src/pipeline/stages/`: `session.ts`, `git.ts`, `repo.ts`.
+- Stages grouped by domain in `src/pipeline/stages/`: `session.ts`, `git.ts`.
 - Executor (`src/pipeline/executor.ts`) supports serial + parallel steps, retries with configurable delays, and abort signals.
 
 ## Linting

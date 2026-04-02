@@ -6,6 +6,8 @@
   import * as Table from "$lib/components/ui/table/index.js";
   import { timeAgo } from "../format/time";
   import { repoStore } from "../state/repos.svelte.ts";
+  import type { BranchWatch } from "../api/types";
+  import * as api from "../api/client.ts";
 
   $effect(() => { if (repoStore.repos === null) repoStore.refresh(); });
 
@@ -18,6 +20,44 @@
   });
 
   let trackedCount = $derived((repoStore.repos ?? []).filter((r) => r.tracked).length);
+
+  // Branch management state
+  let expandedRepo = $state<string | null>(null);
+  let branchData = $state<{ watched: BranchWatch[]; available: string[] } | null>(null);
+  let loadingBranches = $state(false);
+  let addingBranch = $state<string | null>(null);
+
+  async function toggleBranches(absPath: string) {
+    if (expandedRepo === absPath) {
+      expandedRepo = null;
+      branchData = null;
+      return;
+    }
+    expandedRepo = absPath;
+    loadingBranches = true;
+    try {
+      branchData = await api.getRepoBranches(absPath);
+    } catch {
+      branchData = null;
+    }
+    loadingBranches = false;
+  }
+
+  async function handleWatchBranch(absPath: string, branch: string) {
+    addingBranch = branch;
+    try {
+      await api.watchBranch(absPath, branch);
+      branchData = await api.getRepoBranches(absPath);
+    } catch { /* silent */ }
+    addingBranch = null;
+  }
+
+  async function handleUnwatchBranch(absPath: string, branch: string) {
+    try {
+      await api.unwatchBranch(absPath, branch);
+      branchData = await api.getRepoBranches(absPath);
+    } catch { /* silent */ }
+  }
 </script>
 
 <div class="flex justify-between items-center mb-6">
@@ -111,7 +151,10 @@
                 <div class="flex gap-1 items-center">
                   {#if r.tracked}
                     <Button variant="outline" size="sm" class="h-6 text-[11px] border-primary text-primary hover:bg-primary/10 {repoStore.syncingRepos.has(r.absPath) ? 'opacity-50 pointer-events-none' : ''}" onclick={() => repoStore.sync(r.absPath)}>
-                      {repoStore.syncingRepos.has(r.absPath) ? "Syncing..." : "Sync"}
+                      {repoStore.syncingRepos.has(r.absPath) ? "Checking..." : "Refresh"}
+                    </Button>
+                    <Button variant="ghost" size="sm" class="h-6 text-[11px] text-muted-foreground hover:text-foreground" onclick={() => toggleBranches(r.absPath)} title="Manage watched branches">
+                      {expandedRepo === r.absPath ? "▾" : "▸"} branches
                     </Button>
                   {/if}
                   <Button variant="ghost" size="sm" class="h-6 text-[11px] text-muted-foreground hover:text-foreground" onclick={() => repoStore.openIn(r.absPath, "vscode")} title="Open in VS Code">code</Button>
@@ -124,6 +167,48 @@
                 </div>
               </Table.Cell>
             </Table.Row>
+            {#if expandedRepo === r.absPath}
+              <Table.Row>
+                <Table.Cell colspan={5} class="bg-muted/30 px-6 py-3">
+                  {#if loadingBranches}
+                    <div class="text-xs text-muted-foreground">Loading branches...</div>
+                  {:else if branchData}
+                    <div class="space-y-2">
+                      <div class="text-xs font-medium text-muted-foreground">Watched branches</div>
+                      <div class="flex flex-wrap gap-1.5">
+                        {#each branchData.watched as w}
+                          <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono bg-primary/10 text-primary border border-primary/20">
+                            {w.branchName}
+                            {#if w.isDefault}
+                              <span class="text-[9px] opacity-60">(default)</span>
+                            {/if}
+                            {#if !w.isDefault}
+                              <button class="ml-0.5 opacity-50 hover:opacity-100" onclick={() => handleUnwatchBranch(r.absPath, w.branchName)} title="Stop watching">&times;</button>
+                            {/if}
+                          </span>
+                        {/each}
+                      </div>
+                      {#if branchData.available.length > 0}
+                        <div class="text-xs font-medium text-muted-foreground mt-2">Add branch</div>
+                        <div class="flex flex-wrap gap-1.5">
+                          {#each branchData.available as branch}
+                            <button
+                              class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-mono bg-muted text-muted-foreground border border-border hover:border-primary hover:text-primary transition-colors {addingBranch === branch ? 'opacity-50' : ''}"
+                              onclick={() => handleWatchBranch(r.absPath, branch)}
+                              disabled={addingBranch === branch}
+                            >
+                              + {branch}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {:else}
+                    <div class="text-xs text-muted-foreground">Failed to load branches</div>
+                  {/if}
+                </Table.Cell>
+              </Table.Row>
+            {/if}
           {/each}
         {/if}
       </Table.Body>

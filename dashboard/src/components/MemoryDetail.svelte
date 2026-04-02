@@ -7,7 +7,7 @@
   import { formatCompact } from "../format/numbers";
   import { renderMarkdown } from "../format/markdown";
   import * as api from "../api/client";
-  import type { MemoryEntry, EntrySignals } from "../api/types";
+  import type { MemoryEntry, EntrySignals, EntryRevision, RevisionAction } from "../api/types";
   import { computeUsageScore, computeRelevanceScore, RATING_LEGEND } from "$lib/scoring";
 
   interface Props {
@@ -20,6 +20,7 @@
 
   let memory = $state<MemoryEntry | null>(null);
   let signals = $state<EntrySignals | null>(null);
+  let revisions = $state<EntryRevision[]>([]);
   let viewMode = $state<"preview" | "raw">("preview");
   let renderedHtml = $derived(memory ? renderMarkdown(memory.body) : "");
 
@@ -27,15 +28,17 @@
     if (memoryId == null) {
       memory = null;
       signals = null;
+      revisions = [];
       return;
     }
     viewMode = "preview";
     const id = memoryId;
     void (async () => {
       try {
-        const [ctxAll, sigStore] = await Promise.all([api.getMemories(), api.getSignals()]);
+        const [ctxAll, sigStore, revs] = await Promise.all([api.getMemories(), api.getSignals(), api.getEntryRevisions(id)]);
         memory = ctxAll.find((c) => c.id === id) ?? null;
         signals = sigStore.entries?.[id] ?? null;
+        revisions = revs;
       } catch { /* silent */ }
     })();
   });
@@ -57,8 +60,15 @@
   const RATING_COLORS: Record<string, string> = Object.fromEntries(RATING_LEGEND.map(r => [String(r.rating), r.color]));
   const RATING_LABELS: Record<string, string> = Object.fromEntries(RATING_LEGEND.map(r => [String(r.rating), r.label]));
 
+  const ACTION_COLORS: Record<RevisionAction, string> = {
+    created: "var(--success)",
+    updated: "var(--warning)",
+    deleted: "var(--destructive)",
+    restored: "var(--accent)",
+  };
+
   async function handleDelete(id: string) {
-    if (!confirm("Delete this memory entry? This cannot be undone.")) return;
+    if (!confirm("Delete this memory entry? It can be restored later from the deleted entries view.")) return;
     try {
       await api.deleteMemory(id);
       onClose();
@@ -187,6 +197,28 @@
               {/each}
             </div>
           {/if}
+        </div>
+      {/if}
+
+      {#if revisions.length > 0}
+        <div class="mt-4 p-4 bg-background border rounded-md">
+          <h3 class="text-sm text-muted-foreground uppercase tracking-wider mb-3">History ({revisions.length})</h3>
+          <div class="flex flex-col gap-1.5">
+            {#each revisions.slice(0, 20) as rev}
+              <div class="flex items-start gap-2 text-xs p-1.5 px-2 bg-card rounded">
+                <span class="inline-flex items-center gap-1 shrink-0 mt-0.5">
+                  <span class="size-2.5 rounded-full" style="background:{ACTION_COLORS[rev.action] ?? 'var(--dim)'}"></span>
+                  <span class="font-medium uppercase text-[10px] tracking-wider" style="color:{ACTION_COLORS[rev.action] ?? 'var(--dim)'}">{rev.action}</span>
+                </span>
+                <span class="text-muted-foreground flex-1">{rev.reason || "no reason"}</span>
+                <span class="text-dim text-[10px] shrink-0">{rev.source}</span>
+                {#if rev.executionId}
+                  <span class="text-dim text-[10px] font-mono shrink-0" title="Pipeline execution">{rev.executionId.slice(0, 8)}</span>
+                {/if}
+                <span class="text-dim text-[10px] whitespace-nowrap shrink-0">{timeAgo(rev.createdAt)}</span>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
 

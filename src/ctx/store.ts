@@ -78,6 +78,54 @@ export interface EntryRow {
   tokens: number;
   created_at: string;
   updated_at: string;
+  deleted_at: string | null;
+}
+
+// ── Revision types ────────────────────────────────────────────────────
+
+export type RevisionAction = "created" | "updated" | "deleted" | "restored";
+
+const REVISION_ACTIONS: readonly string[] = ["created", "updated", "deleted", "restored"];
+export function isRevisionAction(value: string): value is RevisionAction {
+  return REVISION_ACTIONS.includes(value);
+}
+
+export interface RevisionOptions {
+  reason?: string;
+  source?: string;
+  executionId?: string;
+}
+
+export interface EntryRevision {
+  id: number;
+  entryId: string;
+  action: RevisionAction;
+  reason: string | null;
+  source: string;
+  executionId: string | null;
+  title: string;
+  scope: Scope;
+  tags: string[];
+  project: string;
+  body: string;
+  tokens: number;
+  createdAt: string;
+}
+
+interface RevisionRow {
+  id: number;
+  entry_id: string;
+  action: string;
+  reason: string | null;
+  source: string;
+  execution_id: string | null;
+  title: string;
+  scope: string;
+  tags: string;
+  project: string;
+  body: string;
+  tokens: number;
+  created_at: string;
 }
 
 function rowToMeta(row: EntryRow): EntryMeta {
@@ -109,7 +157,7 @@ function rowToEntry(row: EntryRow): Entry {
 
 // ── Entry CRUD ─────────────────────────────────────────────────────────
 
-export function writeEntry(meta: EntryMeta, body: string): string {
+export function writeEntry(meta: EntryMeta, body: string, options?: RevisionOptions): string {
   const db = getDb();
   const slug = slugify(meta.title);
   const serialized = `${meta.title}\n${body}`;
@@ -117,40 +165,47 @@ export function writeEntry(meta: EntryMeta, body: string): string {
   const tags = JSON.stringify(meta.tags);
   const now = new Date().toISOString();
 
-  db.prepare(`
-    INSERT INTO entries (id, title, slug, scope, tags, project, body, tokens, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      title = excluded.title, slug = excluded.slug, scope = excluded.scope,
-      tags = excluded.tags, project = excluded.project, body = excluded.body,
-      tokens = excluded.tokens, updated_at = excluded.updated_at
-  `).run(meta.id, meta.title, slug, meta.scope, tags, meta.project, body, tokens, meta.created || now, now);
+  const existing = db.prepare<{ id: string }, [string]>("SELECT id FROM entries WHERE id = ?").get(meta.id);
+  const action: RevisionAction = existing != null ? "updated" : "created";
 
-  // Fire-and-forget: generate and store embedding when vector search is enabled
-  if (isVectorSearchEnabled()) {
-    const config = getVectorSearchConfig();
-    if (config.apiKey !== null) {
-      const text = `${meta.title}\n${body}`;
-      generateEmbedding(text, config.apiKey, config.model)
-        .then((embedding) => syncEntryEmbedding(meta.id, embedding))
-        .catch((err) => console.error(`[embeddings] Failed for ${meta.id}:`, err));
-    }
-  }
+  const doWrite = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO entries (id, title, slug, scope, tags, project, body, tokens, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title, slug = excluded.slug, scope = excluded.scope,
+        tags = excluded.tags, project = excluded.project, body = excluded.body,
+        tokens = excluded.tokens, updated_at = excluded.updated_at
+    `).run(meta.id, meta.title, slug, meta.scope, tags, meta.project, body, tokens, meta.created || now, now);
+
+    recordRevision(meta.id, action, { title: meta.title, scope: meta.scope, tags, project: meta.project, body, tokens }, options);
+  });
+  doWrite();
+
+  maybeGenerateEmbedding(meta.id, meta.title, body);
 
   return slug;
 }
 
 export function readEntry(scope: Scope, slug: string): Entry {
   const db = getDb();
-  const row = db.prepare<EntryRow, [string, string]>("SELECT * FROM entries WHERE scope = ? AND slug = ?").get(scope, slug);
+  const row = db.prepare<EntryRow, [string, string]>("SELECT * FROM entries WHERE scope = ? AND slug = ? AND deleted_at IS NULL").get(scope, slug);
   if (!row) throw new Error(`Entry not found: ${scope}/${slug}`);
   return rowToEntry(row);
 }
 
-export function deleteEntry(scope: Scope, slug: string): void {
+export function deleteEntry(scope: Scope, slug: string, options?: RevisionOptions): void {
   const db = getDb();
-  const result = db.prepare("DELETE FROM entries WHERE scope = ? AND slug = ?").run(scope, slug);
-  if (result.changes === 0) throw new Error(`Entry not found: ${scope}/${slug}`);
+  const now = new Date().toISOString();
+
+  const row = db.prepare<EntryRow, [string, string]>("SELECT * FROM entries WHERE scope = ? AND slug = ? AND deleted_at IS NULL").get(scope, slug);
+  if (!row) throw new Error(`Entry not found: ${scope}/${slug}`);
+
+  const doDelete = db.transaction(() => {
+    db.prepare("UPDATE entries SET deleted_at = ?, updated_at = ? WHERE id = ?").run(now, now, row.id);
+    recordRevision(row.id, "deleted", { title: row.title, scope: row.scope, tags: row.tags, project: row.project, body: row.body, tokens: row.tokens }, options);
+  });
+  doDelete();
 }
 
 // ── Index ──────────────────────────────────────────────────────────────
@@ -158,7 +213,7 @@ export function deleteEntry(scope: Scope, slug: string): void {
 export function loadIndex(): IndexEntry[] {
   const db = getDb();
   const rows = db.prepare<EntryRow, []>(
-    "SELECT id, title, slug, scope, tags, project, '' as body, tokens, created_at, updated_at FROM entries ORDER BY updated_at DESC",
+    "SELECT id, title, slug, scope, tags, project, '' as body, tokens, created_at, updated_at, deleted_at FROM entries WHERE deleted_at IS NULL ORDER BY updated_at DESC",
   ).all();
   return rows.map(rowToIndexEntry);
 }
@@ -169,7 +224,7 @@ export function loadIndex(): IndexEntry[] {
 export function loadIndexEntries(): (IndexEntry & { body: string })[] {
   const db = getDb();
   const rows = db.prepare<EntryRow, []>(
-    "SELECT id, title, slug, scope, tags, project, body, tokens, created_at, updated_at FROM entries ORDER BY updated_at DESC",
+    "SELECT id, title, slug, scope, tags, project, body, tokens, created_at, updated_at, deleted_at FROM entries WHERE deleted_at IS NULL ORDER BY updated_at DESC",
   ).all();
   return rows.map((row) => ({ ...rowToIndexEntry(row), body: row.body }));
 }
@@ -183,15 +238,17 @@ export function rebuildIndex(): IndexEntry[] {
 
 export function resolveEntry(
   idOrSlug: string,
+  includeDeleted = false,
 ): { scope: Scope; slug: string } | null {
   const db = getDb();
+  const deletedFilter = includeDeleted ? "" : " AND deleted_at IS NULL";
 
-  const byId = db.prepare<{ scope: string; slug: string }, [string]>("SELECT scope, slug FROM entries WHERE id = ?").get(idOrSlug);
+  const byId = db.prepare<{ scope: string; slug: string }, [string]>(`SELECT scope, slug FROM entries WHERE id = ?${deletedFilter}`).get(idOrSlug);
   if (byId) {
     return { scope: ScopeSchema.parse(byId.scope), slug: byId.slug };
   }
 
-  const bySlug = db.prepare<{ scope: string; slug: string }, [string]>("SELECT scope, slug FROM entries WHERE slug = ? LIMIT 1").get(idOrSlug);
+  const bySlug = db.prepare<{ scope: string; slug: string }, [string]>(`SELECT scope, slug FROM entries WHERE slug = ?${deletedFilter} LIMIT 1`).get(idOrSlug);
   if (bySlug) {
     return { scope: ScopeSchema.parse(bySlug.scope), slug: bySlug.slug };
   }
@@ -265,5 +322,149 @@ tokens: ${meta.tokens}
 
 ${body}
 `;
+}
+
+// ── Embedding helper ──────────────────────────────────────────────────
+
+function maybeGenerateEmbedding(entryId: string, title: string, body: string): void {
+  if (!isVectorSearchEnabled()) return;
+  const config = getVectorSearchConfig();
+  if (config.apiKey === null) return;
+  const text = `${title}\n${body}`;
+  generateEmbedding(text, config.apiKey, config.model)
+    .then((embedding) => syncEntryEmbedding(entryId, embedding))
+    .catch((err) => console.error(`[embeddings] Failed for ${entryId}:`, err));
+}
+
+// ── Revision helpers ──────────────────────────────────────────────────
+
+interface RevisionSnapshot {
+  title: string;
+  scope: string;
+  tags: string; // JSON string
+  project: string;
+  body: string;
+  tokens: number;
+}
+
+function recordRevision(
+  entryId: string,
+  action: RevisionAction,
+  snapshot: RevisionSnapshot,
+  options?: RevisionOptions,
+): void {
+  const db = getDb();
+  db.prepare(`INSERT INTO entry_revisions (entry_id, action, reason, source, execution_id, title, scope, tags, project, body, tokens, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    entryId,
+    action,
+    options?.reason ?? null,
+    options?.source ?? "manual",
+    options?.executionId ?? null,
+    snapshot.title,
+    snapshot.scope,
+    snapshot.tags,
+    snapshot.project,
+    snapshot.body,
+    snapshot.tokens,
+    new Date().toISOString(),
+  );
+}
+
+const RevisionActionSchema = z.enum(["created", "updated", "deleted", "restored"]);
+
+function rowToRevision(row: RevisionRow): EntryRevision {
+  return {
+    id: row.id,
+    entryId: row.entry_id,
+    action: RevisionActionSchema.parse(row.action),
+    reason: row.reason,
+    source: row.source,
+    executionId: row.execution_id,
+    title: row.title,
+    scope: ScopeSchema.parse(row.scope),
+    tags: TagsSchema.parse(JSON.parse(row.tags)),
+    project: row.project,
+    body: row.body,
+    tokens: row.tokens,
+    createdAt: row.created_at,
+  };
+}
+
+export function getEntryRevisions(entryId: string): EntryRevision[] {
+  const db = getDb();
+  const rows = db.prepare<RevisionRow, [string]>(
+    "SELECT * FROM entry_revisions WHERE entry_id = ? ORDER BY created_at DESC",
+  ).all(entryId);
+  return rows.map(rowToRevision);
+}
+
+export function getRecentRevisions(opts?: {
+  action?: RevisionAction;
+  executionId?: string;
+  limit?: number;
+  since?: string;
+}): EntryRevision[] {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: string[] = [];
+
+  if (opts?.action != null) {
+    conditions.push("action = ?");
+    params.push(opts.action);
+  }
+  if (opts?.executionId != null) {
+    conditions.push("execution_id = ?");
+    params.push(opts.executionId);
+  }
+  if (opts?.since != null) {
+    conditions.push("created_at >= ?");
+    params.push(opts.since);
+  }
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const limit = opts?.limit ?? 50;
+
+  const rows = db.prepare<RevisionRow, string[]>(
+    `SELECT * FROM entry_revisions ${where} ORDER BY created_at DESC LIMIT ${limit}`,
+  ).all(...params);
+  return rows.map(rowToRevision);
+}
+
+export function countRevisionActions(executionId: string): Record<string, number> {
+  const db = getDb();
+  const rows = db.prepare<{ action: string; cnt: number }, [string]>(
+    "SELECT action, COUNT(*) as cnt FROM entry_revisions WHERE execution_id = ? GROUP BY action",
+  ).all(executionId);
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[row.action] = row.cnt;
+  return counts;
+}
+
+export function getDeletedEntries(): (IndexEntry & { body: string; deletedAt: string })[] {
+  const db = getDb();
+  const rows = db.prepare<EntryRow, []>(
+    "SELECT id, title, slug, scope, tags, project, SUBSTR(body, 1, 200) as body, tokens, created_at, updated_at, deleted_at FROM entries WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+  ).all();
+  return rows.map((row) => ({
+    ...rowToIndexEntry(row),
+    body: row.body,
+    deletedAt: row.deleted_at!,
+  }));
+}
+
+export function restoreEntry(entryId: string, options?: RevisionOptions): void {
+  const db = getDb();
+  const row = db.prepare<EntryRow, [string]>("SELECT * FROM entries WHERE id = ? AND deleted_at IS NOT NULL").get(entryId);
+  if (!row) throw new Error(`Deleted entry not found: ${entryId}`);
+
+  const now = new Date().toISOString();
+  const doRestore = db.transaction(() => {
+    db.prepare("UPDATE entries SET deleted_at = NULL, updated_at = ? WHERE id = ?").run(now, entryId);
+    recordRevision(entryId, "restored", { title: row.title, scope: row.scope, tags: row.tags, project: row.project, body: row.body, tokens: row.tokens }, options);
+  });
+  doRestore();
+
+  maybeGenerateEmbedding(entryId, row.title, row.body);
 }
 

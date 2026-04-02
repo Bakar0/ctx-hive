@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import { z } from "zod";
 import { getDb } from "../db/connection.ts";
 import type { PipelineExecution } from "../pipeline/schema.ts";
@@ -46,14 +45,28 @@ const RepoSyncJobSchema = z.object({
   cwd: z.string(),
 });
 
+const GitChangeJobSchema = z.object({
+  type: z.literal("git-change"),
+  createdAt: z.string(),
+  repoPath: z.string(),
+  branch: z.string(),
+  previousSha: z.string(),
+  currentSha: z.string(),
+  worktreePath: z.string(),
+  commitMessages: z.string(),
+  changedFiles: z.string(),
+  diffSummary: z.string(),
+});
+
 export const JobSchema = z.discriminatedUnion("type", [
-  SessionMineJobSchema, GitPushJobSchema, GitPullJobSchema, RepoSyncJobSchema,
+  SessionMineJobSchema, GitPushJobSchema, GitPullJobSchema, RepoSyncJobSchema, GitChangeJobSchema,
 ]);
 
 export type SessionMineJob = z.infer<typeof SessionMineJobSchema>;
 export type GitPushJob = z.infer<typeof GitPushJobSchema>;
 export type GitPullJob = z.infer<typeof GitPullJobSchema>;
 export type RepoSyncJob = z.infer<typeof RepoSyncJobSchema>;
+export type GitChangeJob = z.infer<typeof GitChangeJobSchema>;
 export type Job = z.infer<typeof JobSchema>;
 
 export const JOB_STATUSES = ["pending", "processing", "done", "failed"] as const;
@@ -112,6 +125,14 @@ export function isGitJobProcessed(headSha: string, repoPath: string): boolean {
   return row !== null && row.cnt > 0;
 }
 
+export function isGitChangeProcessed(currentSha: string, repoPath: string, branch: string): boolean {
+  const db = getDb();
+  const row = db.prepare<{ cnt: number }, [string, string, string]>(
+    "SELECT COUNT(*) as cnt FROM jobs WHERE status = 'done' AND type = 'git-change' AND json_extract(payload, '$.currentSha') = ? AND json_extract(payload, '$.repoPath') = ? AND json_extract(payload, '$.branch') = ?",
+  ).get(currentSha, repoPath, branch);
+  return row !== null && row.cnt > 0;
+}
+
 export function stampStarted(jobId: string): void {
   const db = getDb();
   db.prepare("UPDATE jobs SET started_at = ?, status = 'processing' WHERE job_id = ?")
@@ -152,13 +173,3 @@ export function jobTimestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-export function enqueueRepoSync(repoPath: string): void {
-  const repoName = basename(repoPath);
-  const syncJob: RepoSyncJob = {
-    type: "repo-sync",
-    repoPath,
-    cwd: repoPath,
-    createdAt: new Date().toISOString(),
-  };
-  writeJob(syncJob, `${jobTimestamp()}-sync-${repoName}`);
-}

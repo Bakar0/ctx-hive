@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { executePipeline } from "../pipeline/executor.ts";
 import { readMessage, writeManifest } from "../pipeline/messages.ts";
-import { sessionMinePipeline, gitPushPipeline, gitPullPipeline, repoSyncPipeline } from "../pipeline/definitions.ts";
+import { sessionMinePipeline, gitPushPipeline, gitPullPipeline, gitChangePipeline } from "../pipeline/definitions.ts";
 import { broadcastPipelineEvent } from "./ws.ts";
 import { projectFromCwd } from "./api.ts";
 import type { Job, JobResult } from "./jobs.ts";
@@ -163,8 +163,13 @@ async function handleGitChange(job: Job, ctx: HandlerContext): Promise<JobResult
 async function handleRepoSync(job: Job, ctx: HandlerContext): Promise<JobResult> {
   if (job.type !== "repo-sync") throw new Error("Expected repo-sync job");
 
-  const execution = await executePipeline(repoSyncPipeline, {
+  // Legacy: redirect to unified git-change pipeline (first-scan mode)
+  const execution = await executePipeline(gitChangePipeline, {
     repoPath: job.repoPath,
+    previousSha: "",
+    commitMessages: "",
+    changedFiles: "",
+    diffSummary: "",
   }, {
     jobId: ctx.jobId,
     project: projectFromCwd(job.repoPath),
@@ -177,9 +182,36 @@ async function handleRepoSync(job: Job, ctx: HandlerContext): Promise<JobResult>
   return buildJobResult(execution);
 }
 
+// ── Git change (polling) handler ─────────────────────────────────────
+
+async function handleGitChangePolled(job: Job, ctx: HandlerContext): Promise<JobResult> {
+  if (job.type !== "git-change") throw new Error("Expected git-change job");
+
+  const execution = await executePipeline(gitChangePipeline, {
+    repoPath: job.repoPath,
+    worktreePath: job.worktreePath,
+    branch: job.branch,
+    previousSha: job.previousSha,
+    currentSha: job.currentSha,
+    commitMessages: job.commitMessages,
+    changedFiles: job.changedFiles,
+    diffSummary: job.diffSummary,
+  }, {
+    jobId: ctx.jobId,
+    project: projectFromCwd(job.repoPath),
+    signal: ctx.signal,
+    ...buildPipelineCallbacks("git-change"),
+  });
+
+  persistEntriesCount(execution);
+
+  return buildJobResult(execution);
+}
+
 // ── Register built-in handlers ────────────────────────────────────────
 
 registerHandler("session-mine", handleSessionMine);
 registerHandler("git-push", handleGitChange);
 registerHandler("git-pull", handleGitChange);
+registerHandler("git-change", handleGitChangePolled);
 registerHandler("repo-sync", handleRepoSync);

@@ -10,19 +10,27 @@ import {
   loadIndexEntries,
   deleteEntry,
   resolveEntry,
+  getEntryRevisions,
+  getRecentRevisions,
+  getDeletedEntries,
+  restoreEntry,
+  isRevisionAction,
   type IndexEntry,
   isScope,
   SCOPES,
 } from "../ctx/store.ts";
 import {
-  enqueueRepoSync,
+  writeJob,
+  jobTimestamp,
   JOB_STATUSES,
   type JobStatus,
+  type GitChangeJob,
 } from "./jobs.ts";
 import {
   trackRepo,
   untrackRepo,
   updateLastScanned,
+  getRepoId,
 } from "../repo/tracking.ts";
 import { loadSignals } from "../ctx/signals.ts";
 import { searchMulti, type SearchFilters } from "../ctx/search.ts";
@@ -38,6 +46,8 @@ import {
 import { broadcastRepoEvent, broadcastJobEvent, markMetricsDirty } from "./ws.ts";
 import { triggerDrain, abortJob } from "./serve.ts";
 import { errorMessage } from "../git/run.ts";
+import { pollSingleRepo, listBranchWatches, addBranchWatch, removeBranchWatch, listRemoteBranches } from "./branch-watcher.ts";
+import { getWorktreePath } from "../repo/clone.ts";
 import { listExecutions, readManifest, readMessage, canonicalStageName } from "../pipeline/messages.ts";
 import { PipelineExecutionSchema, type PipelineExecution } from "../pipeline/schema.ts";
 
@@ -116,6 +126,7 @@ export function projectFromCwd(cwd?: string): string {
 
 const RepoBodySchema = z.object({ absPath: z.string().min(1) });
 const RepoOpenBodySchema = z.object({ absPath: z.string().min(1), target: z.string().optional() });
+const BranchBodySchema = z.object({ absPath: z.string().min(1), branchName: z.string().min(1) });
 
 interface JobIdRow { job_id: string }
 
@@ -216,7 +227,7 @@ export async function getMetrics(): Promise<MetricsSnapshot> {
 
   // Entry counts by scope and project
   const scopeCounts = db.prepare<{ scope: string; cnt: number }, []>(
-    "SELECT scope, COUNT(*) as cnt FROM entries GROUP BY scope",
+    "SELECT scope, COUNT(*) as cnt FROM entries WHERE deleted_at IS NULL GROUP BY scope",
   ).all();
   const byScope: Record<string, number> = {};
   let memoryTotal = 0;
@@ -226,7 +237,7 @@ export async function getMetrics(): Promise<MetricsSnapshot> {
   }
 
   const projectCounts = db.prepare<{ project: string; cnt: number }, []>(
-    "SELECT project, COUNT(*) as cnt FROM entries WHERE project != '' GROUP BY project",
+    "SELECT project, COUNT(*) as cnt FROM entries WHERE project != '' AND deleted_at IS NULL GROUP BY project",
   ).all();
   const byProject: Record<string, number> = {};
   for (const row of projectCounts) {
@@ -250,7 +261,7 @@ export async function getMetrics(): Promise<MetricsSnapshot> {
 export function deleteMemoryById(idOrSlug: string): boolean {
   const resolved = resolveEntry(idOrSlug);
   if (!resolved) return false;
-  deleteEntry(resolved.scope, resolved.slug);
+  deleteEntry(resolved.scope, resolved.slug, { source: "api" });
   return true;
 }
 
@@ -441,6 +452,39 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     return json(getMemories({ scope, project, sortBy }));
   }
 
+  // GET /api/memories/deleted — soft-deleted entries
+  if (path === "/api/memories/deleted" && req.method === "GET") {
+    return json(getDeletedEntries());
+  }
+
+  // GET /api/revisions?limit=&action=&executionId= — recent revisions across all entries
+  if (path === "/api/revisions" && req.method === "GET") {
+    const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
+    const actionRaw = url.searchParams.get("action") ?? "";
+    const action = isRevisionAction(actionRaw) ? actionRaw : undefined;
+    const executionId = url.searchParams.get("executionId") ?? undefined;
+    return json(getRecentRevisions({ limit, action, executionId }));
+  }
+
+  // GET /api/memories/:id/revisions — revision history for an entry
+  const revisionsMatch = /^\/api\/memories\/([^/]+)\/revisions$/.exec(path);
+  if (revisionsMatch && req.method === "GET") {
+    const entryId = decodeURIComponent(revisionsMatch[1]!);
+    return json(getEntryRevisions(entryId));
+  }
+
+  // POST /api/memories/:id/restore — restore a soft-deleted entry
+  const restoreMatch = /^\/api\/memories\/([^/]+)\/restore$/.exec(path);
+  if (restoreMatch && req.method === "POST") {
+    const entryId = decodeURIComponent(restoreMatch[1]!);
+    try {
+      restoreEntry(entryId, { source: "api", reason: "restored via dashboard" });
+      return json({ ok: true });
+    } catch (err) {
+      return json({ error: errorMessage(err) }, 404);
+    }
+  }
+
   // DELETE /api/memories/:id
   const deleteMatch = /^\/api\/memories\/(.+)$/.exec(path);
   if (deleteMatch && req.method === "DELETE") {
@@ -508,7 +552,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
   if (path === "/api/settings/vector-search" && req.method === "GET") {
     const config = getVectorSearchConfig();
     const db = getDb();
-    const totalCount = db.prepare<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM entries").get()!.cnt;
+    const totalCount = db.prepare<{ cnt: number }, []>("SELECT COUNT(*) as cnt FROM entries WHERE deleted_at IS NULL").get()!.cnt;
     const embeddedCount = countEmbeddings();
     return json({
       enabled: config.enabled,
@@ -614,10 +658,28 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     try {
       const result = RepoBodySchema.safeParse(await req.json());
       if (!result.success) return json({ error: "absPath required" }, 400);
-      const tracked = await trackRepo(result.data.absPath);
+      const { repo: tracked, repoId, defaultBranch } = await trackRepo(result.data.absPath);
       broadcastRepoEvent("repo:tracked", tracked);
-      enqueueRepoSync(result.data.absPath);
-      triggerDrain();
+
+      // Enqueue first-scan job via unified git-change pipeline
+      if (defaultBranch !== null) {
+        const wtPath = getWorktreePath(repoId, defaultBranch);
+        const firstScanJob: GitChangeJob = {
+          type: "git-change",
+          createdAt: new Date().toISOString(),
+          repoPath: result.data.absPath,
+          branch: defaultBranch,
+          previousSha: "",
+          currentSha: "",
+          worktreePath: wtPath,
+          commitMessages: "",
+          changedFiles: "",
+          diffSummary: "",
+        };
+        writeJob(firstScanJob, `${jobTimestamp()}-first-scan-${tracked.name}`);
+        triggerDrain();
+      }
+
       return json(tracked);
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
@@ -629,7 +691,7 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     try {
       const result = RepoBodySchema.safeParse(await req.json());
       if (!result.success) return json({ error: "absPath required" }, 400);
-      const removed = untrackRepo(result.data.absPath);
+      const removed = await untrackRepo(result.data.absPath);
       if (!removed) return json({ error: "Not tracked" }, 404);
       broadcastRepoEvent("repo:untracked", { absPath: result.data.absPath });
       return json({ ok: true });
@@ -638,15 +700,15 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
     }
   }
 
-  // POST /api/repos/sync — full memory sync (enqueues init-style job)
+  // POST /api/repos/sync — poll remote branches for changes (force-refresh)
   if (path === "/api/repos/sync" && req.method === "POST") {
     try {
       const result = RepoBodySchema.safeParse(await req.json());
       if (!result.success) return json({ error: "absPath required" }, 400);
       updateLastScanned(result.data.absPath);
-      enqueueRepoSync(result.data.absPath);
-      triggerDrain();
-      return json({ ok: true, message: "Sync job enqueued" });
+      const changesDetected = await pollSingleRepo(result.data.absPath);
+      if (changesDetected > 0) triggerDrain();
+      return json({ ok: true, changesDetected });
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);
     }
@@ -665,6 +727,58 @@ export async function handleApiRequest(req: Request, url: URL): Promise<Response
       } else {
         return json({ error: "target must be 'vscode' or 'terminal'" }, 400);
       }
+      return json({ ok: true });
+    } catch (err) {
+      return json({ error: errorMessage(err) }, 400);
+    }
+  }
+
+  // ── Branch watch endpoints ─────────────────────────────────────────
+
+  // GET /api/repos/branches?absPath=... — list watched + available branches
+  if (path === "/api/repos/branches" && req.method === "GET") {
+    const absPath = url.searchParams.get("absPath") ?? "";
+    if (absPath === "") return json({ error: "absPath required" }, 400);
+    try {
+      const repoId = getRepoId(absPath);
+      if (repoId === null) return json({ error: "Repo not tracked" }, 404);
+
+      const watches = listBranchWatches(repoId);
+      const remoteBranches = await listRemoteBranches(absPath);
+      const watchedNames = new Set(watches.map((w) => w.branchName));
+
+      return json({
+        watched: watches,
+        available: remoteBranches.filter((b) => !watchedNames.has(b)),
+      });
+    } catch (err) {
+      return json({ error: errorMessage(err) }, 400);
+    }
+  }
+
+  // POST /api/repos/branches/watch — add a branch watch
+  if (path === "/api/repos/branches/watch" && req.method === "POST") {
+    try {
+      const body = BranchBodySchema.safeParse(await req.json());
+      if (!body.success) return json({ error: "absPath and branchName required" }, 400);
+      const repoId = getRepoId(body.data.absPath);
+      if (repoId === null) return json({ error: "Repo not tracked" }, 404);
+      await addBranchWatch(repoId, body.data.branchName);
+      return json({ ok: true });
+    } catch (err) {
+      return json({ error: errorMessage(err) }, 400);
+    }
+  }
+
+  // POST /api/repos/branches/unwatch — remove a branch watch
+  if (path === "/api/repos/branches/unwatch" && req.method === "POST") {
+    try {
+      const body = BranchBodySchema.safeParse(await req.json());
+      if (!body.success) return json({ error: "absPath and branchName required" }, 400);
+      const repoId = getRepoId(body.data.absPath);
+      if (repoId === null) return json({ error: "Repo not tracked" }, 404);
+      const removed = await removeBranchWatch(repoId, body.data.branchName);
+      if (!removed) return json({ error: "Branch watch not found" }, 404);
       return json({ ok: true });
     } catch (err) {
       return json({ error: errorMessage(err) }, 400);

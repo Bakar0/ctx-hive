@@ -27,6 +27,13 @@ function parseTags(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseRevisionOptions(args: string[]): { reason?: string; source: string; executionId?: string } {
+  const reason = getFlag(args, "--reason");
+  const executionId = process.env.CTX_HIVE_EXECUTION_ID;
+  const source = executionId !== undefined ? "pipeline" : "cli";
+  return { reason, source, executionId };
+}
+
 // ── Help ───────────────────────────────────────────────────────────────
 
 function printCtxHelp() {
@@ -44,6 +51,7 @@ Subcommands:
     --project <name>             Project name (for project scope)
     --body <text>                Entry body text
     --file <path>                Read body from file
+    --reason <text>              Reason for the change (recorded in revision history)
 
   search <query>                 Search the memory hive
     --scope <scope>              Filter by scope
@@ -61,8 +69,9 @@ Subcommands:
 
   edit <id-or-slug>              Open entry in $EDITOR
 
-  delete <id-or-slug>            Delete an entry
+  delete <id-or-slug>            Delete an entry (soft-delete, can be restored)
     --force                      Skip confirmation
+    --reason <text>              Reason for deletion (recorded in revision history)
 
   rebuild-index                  Rebuild index from entry files
 
@@ -139,7 +148,7 @@ async function ctxAdd(args: string[]): Promise<void> {
     tokens: 0,
   };
 
-  const slug = writeEntry(meta, body);
+  const slug = writeEntry(meta, body, parseRevisionOptions(args));
   console.log(`Added: ${scope}/${slug} (id: ${meta.id})`);
 }
 
@@ -280,7 +289,7 @@ async function ctxDelete(args: string[]): Promise<void> {
     }
   }
 
-  deleteEntry(resolved.scope, resolved.slug);
+  deleteEntry(resolved.scope, resolved.slug, parseRevisionOptions(args));
   console.log(`Deleted: ${resolved.scope}/${resolved.slug}`);
 }
 

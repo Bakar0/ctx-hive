@@ -42,7 +42,7 @@ export function getEntriesMissingEmbeddings(): { id: string; title: string; body
     SELECT e.id, e.title, e.body
     FROM entries e
     LEFT JOIN vec_entries v ON v.entry_id = e.id
-    WHERE v.entry_id IS NULL
+    WHERE v.entry_id IS NULL AND e.deleted_at IS NULL
   `).all();
 }
 
@@ -91,7 +91,7 @@ export async function vectorSearch(
            SUBSTR(body, 1, 150) as body, tokens,
            created_at, updated_at
     FROM entries
-    WHERE id IN (${placeholders})
+    WHERE id IN (${placeholders}) AND deleted_at IS NULL
   `).all(...ids);
 
   const entryMap = new Map(entryRows.map((r) => [r.id, r]));

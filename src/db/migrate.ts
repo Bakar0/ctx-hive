@@ -31,6 +31,12 @@ export function ensureSchema(db: Database): void {
   if (currentVersion < 6) {
     migrateToV6(db);
   }
+  if (currentVersion < 7) {
+    migrateToV7(db);
+  }
+  if (currentVersion < 8) {
+    migrateToV8(db);
+  }
 }
 
 // ── V1 Schema ─────────────────────────────────────────────────────────
@@ -354,6 +360,79 @@ function migrateToV6(db: Database): void {
     db.exec("CREATE INDEX idx_stages_execution ON pipeline_stages(execution_id)");
 
     db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '6')");
+  });
+
+  migrate();
+}
+
+// ── V7: Branch watches for remote polling ───────────────────────────
+
+function migrateToV7(db: Database): void {
+  const migrate = db.transaction(() => {
+    db.exec(`CREATE TABLE branch_watches (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_id         INTEGER NOT NULL REFERENCES tracked_repos(id) ON DELETE CASCADE,
+      branch_name     TEXT NOT NULL,
+      last_seen_sha   TEXT,
+      last_checked_at TEXT,
+      is_default      INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(repo_id, branch_name)
+    )`);
+    db.exec("CREATE INDEX idx_branch_watches_repo ON branch_watches(repo_id)");
+
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '7')");
+  });
+
+  migrate();
+}
+
+// ── V8: Entry revisions & soft deletes ─────────────────────────────
+
+function migrateToV8(db: Database): void {
+  const migrate = db.transaction(() => {
+    // ── Soft-delete column on entries ────────────────────────────
+    db.exec("ALTER TABLE entries ADD COLUMN deleted_at TEXT");
+    db.exec("CREATE INDEX idx_entries_deleted ON entries(deleted_at)");
+
+    // ── Entry revisions table ───────────────────────────────────
+    db.exec(`CREATE TABLE entry_revisions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      entry_id     TEXT NOT NULL,
+      action       TEXT NOT NULL CHECK(action IN ('created', 'updated', 'deleted', 'restored')),
+      reason       TEXT,
+      source       TEXT NOT NULL DEFAULT 'manual',
+      execution_id TEXT,
+      title        TEXT NOT NULL,
+      scope        TEXT NOT NULL,
+      tags         TEXT NOT NULL DEFAULT '[]',
+      project      TEXT NOT NULL DEFAULT '',
+      body         TEXT NOT NULL DEFAULT '',
+      tokens       INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL
+    )`);
+    db.exec("CREATE INDEX idx_revisions_entry ON entry_revisions(entry_id)");
+    db.exec("CREATE INDEX idx_revisions_action ON entry_revisions(action)");
+    db.exec("CREATE INDEX idx_revisions_execution ON entry_revisions(execution_id)");
+    db.exec("CREATE INDEX idx_revisions_created ON entry_revisions(created_at)");
+
+    // ── Replace FTS update trigger to handle soft-delete ────────
+    // When deleted_at is set, entry should be removed from FTS index.
+    // When deleted_at is cleared (restore), entry should be re-added.
+    db.exec("DROP TRIGGER IF EXISTS entries_au");
+    db.exec(`CREATE TRIGGER entries_au AFTER UPDATE ON entries BEGIN
+      INSERT INTO entries_fts(entries_fts, rowid, title, tags, body)
+      VALUES ('delete', old.rowid, old.title, old.tags, old.body);
+      INSERT INTO entries_fts(rowid, title, tags, body)
+      SELECT new.rowid, new.title, new.tags, new.body
+      WHERE new.deleted_at IS NULL;
+    END`);
+
+    // ── Backfill revisions for existing entries ─────────────────
+    db.exec(`INSERT INTO entry_revisions (entry_id, action, reason, source, title, scope, tags, project, body, tokens, created_at)
+      SELECT id, 'created', 'backfill from existing entries', 'migration', title, scope, tags, project, body, tokens, created_at
+      FROM entries`);
+
+    db.exec("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', '8')");
   });
 
   migrate();

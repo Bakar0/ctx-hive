@@ -425,7 +425,7 @@ function ctxAddInstructions(meta: RepoMeta): string {
   return `### How to add entries:
 For short entries:
 \`\`\`
-ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --body "Entry body content here"
+ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --body "Entry body content here" --reason "Brief explanation of why this entry was created"
 \`\`\`
 
 For longer entries, write the body to a temp file first:
@@ -434,7 +434,7 @@ cat > /tmp/ctx-entry-body.txt << 'ENTRYEOF'
 Multi-line entry body content here.
 Can span multiple lines.
 ENTRYEOF
-ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --file /tmp/ctx-entry-body.txt
+ctx-hive add --title "Entry title" --scope project --tags "tag1,tag2" --project "${meta.name}" --file /tmp/ctx-entry-body.txt --reason "Brief explanation"
 \`\`\``;
 }
 
@@ -443,8 +443,10 @@ function ctxMutateInstructions(meta: RepoMeta): string {
 
 ### How to delete entries:
 \`\`\`
-ctx-hive delete <id> --force
-\`\`\``;
+ctx-hive delete <id> --force --reason "Brief explanation of why this entry is being deleted"
+\`\`\`
+
+**IMPORTANT**: Every \`ctx-hive delete\` and \`ctx-hive add\` command MUST include \`--reason "..."\` explaining why the change is being made. This is recorded in the revision history for observability.`;
 }
 
 /**
@@ -633,7 +635,7 @@ Now read the session files and generate memory entries. Remember: only things an
 // ── Git change prompt ─────────────────────────────────────────────────
 
 export interface GitChangeDetails {
-  trigger: "push" | "pull-merge" | "pull-rebase";
+  trigger: "push" | "pull-merge" | "pull-rebase" | "remote-change";
   commitMessages: string;
   changedFiles: string;
   diffSummary: string;
@@ -648,6 +650,7 @@ export function buildGitChangePrompt(
   const triggerLabel =
     details.trigger === "push" ? "pushed commits" :
     details.trigger === "pull-merge" ? "pulled changes (merge)" :
+    details.trigger === "remote-change" ? "remote branch changes" :
     "pulled changes (rebase)";
 
   return `# Project Overview Updater: ${meta.name}
@@ -718,10 +721,121 @@ ${ctxAddInstructions(meta)}
 Now analyze the changes and update the Project Overview if warranted.`;
 }
 
+// ── Unified extract prompt (worktree-based) ──────────────────────────
+
+export type DiffContext = Omit<GitChangeDetails, "trigger">;
+
+export function buildUnifiedExtractPrompt(
+  meta: RepoMeta,
+  repoContext: RepoContext,
+  existing: IndexEntry[],
+  overviewEntry?: IndexEntry | null,
+  diff?: DiffContext | null,
+): string {
+  const isFirstScan = diff === null || diff === undefined ||
+    (diff.commitMessages === "" && diff.changedFiles === "" && diff.diffSummary === "");
+
+  const sections: string[] = [];
+
+  sections.push(`# Memory Extractor: ${meta.name}`);
+  sections.push(`\nOrg: ${meta.org !== "" ? meta.org : "(unknown)"}`);
+  if (meta.remoteUrl !== "") sections.push(`Remote: ${meta.remoteUrl}`);
+
+  if (isFirstScan) {
+    sections.push(`\n## Mode: Initial Scan\n\nThis is the first analysis of "${meta.name}". Explore the repository thoroughly.`);
+  } else {
+    sections.push(`\n## Mode: Incremental Update\n\nRemote branch changes detected.\n`);
+    sections.push(`### Commits\n${diff.commitMessages || "(no commit messages available)"}`);
+    sections.push(`### Changed files\n${diff.changedFiles || "(no file list available)"}`);
+    sections.push(`### Diff summary\n${diff.diffSummary || "(no diff summary available)"}`);
+  }
+
+  if (repoContext.readme !== "") {
+    sections.push(`\n## README.md\n\n${repoContext.readme}`);
+  }
+  if (repoContext.claudeMd !== "") {
+    sections.push(`\n## CLAUDE.md\n\n${repoContext.claudeMd}`);
+  }
+
+  sections.push(existingEntriesBlock(existing));
+
+  sections.push(`
+## Instructions
+
+You have TWO tasks for "${meta.name}":
+
+### Task 1: Create/Update the Project Overview
+
+${overviewEntry
+  ? `An existing Project Overview entry exists (id: ${overviewEntry.id}). Read it with \`ctx-hive show ${overviewEntry.id}\`, then decide if it needs updating.`
+  : "No Project Overview exists yet. Create one from scratch."}
+
+${isFirstScan ? "Explore the repository thoroughly (Glob, Grep, Read)." : "Read the changed files to understand what was modified."}
+
+The Project Overview entry format:
+- **Title**: "Project Overview: ${meta.name}"
+- **Scope**: project
+- **Tags**: project-overview
+- **Project**: ${meta.name}
+
+The body MUST contain these 4 sections:
+
+**## Architecture**
+What the project does at a high level. Key components and how they connect. Tech stack and runtime. Data flow.
+
+**## Capabilities**
+What the project can do: CLI commands, API endpoints, supported integrations, features, user-facing functionality.
+
+**## Dependencies & Boundaries**
+External services, libraries, and systems this project depends on. What depends on this project. Integration contracts and protocols.
+
+**## Recent Changes**
+${isFirstScan
+  ? "Leave this empty for the initial scan — it will be maintained by incremental updates."
+  : "Brief summaries of notable recent changes. Keep only the last 5 entries. Add the current change at the top if it's notable.\nFormat: \\`- [YYYY-MM-DD] Brief description of what changed\\`"}
+
+${overviewEntry ? `To update: first delete the old entry, then create the new one:
+\`\`\`
+ctx-hive delete ${overviewEntry.id} --force
+\`\`\`` : ""}
+
+### Task 2: Find Hidden Memory Insights
+
+${isFirstScan ? "After creating the Project Overview, l" : "L"}ook for insights that **cannot be derived from reading the code**:
+- **Decision rationale** — WHY was this approach chosen over alternatives?
+- **Gotchas and landmines** — things that look correct but break in surprising ways
+- **Cross-service boundaries** — integration contracts, what happens if a dependency is down
+- **Organizational constraints** — compliance requirements, security boundaries
+
+For each insight, create a separate entry (scope: project, tags relevant to the topic).
+
+**Do NOT create insight entries for:**
+- Code structure or architecture (that's in the Project Overview)
+- Build/test commands (belong in CLAUDE.md)
+- How a specific function works (an AI can read the code)
+
+Insight entry format:
+- **Title**: Actionable statement or warning, not a description
+- **Body**: Lead with the insight. Then WHY. Then WHEN this matters. 3-8 lines.
+
+### Rules:
+- ${isFirstScan ? "Always create the Project Overview (Task 1)" : "If the changes don't affect architecture, capabilities, or dependencies, and aren't notable — **do nothing** for Task 1. Routine bug fixes, test changes, and formatting don't need updates."}
+- Generate 0-5 insight entries (Task 2) — quality over quantity, 0 is fine
+- For all entries, include --project "${meta.name}"
+- ${overviewEntry !== null && overviewEntry !== undefined ? "When updating the Project Overview, preserve content for sections that weren't affected." : ""}
+- Don't duplicate what's in CLAUDE.md or existing entries
+
+${ctxAddInstructions(meta)}
+
+Now ${isFirstScan ? "explore the repository and create the Project Overview" : "analyze the changes and update the Project Overview if warranted"}.`);
+
+  return sections.join("\n");
+}
+
 // ── Hippocampal Replay prompt ──────────────────────────────────────────
 
 export interface ReplayContext {
-  type: "session" | "git-push" | "git-pull" | "repo-sync";
+  type: "session" | "git-push" | "git-pull" | "git-change" | "repo-sync";
   transcriptPaths?: string[];
   changeDetails?: GitChangeDetails;
   repoContext?: RepoContext;
@@ -762,11 +876,12 @@ Each line is a JSON object. Relevant message types:
 2. Look for moments where existing knowledge was contradicted, corrected, or superseded`;
   }
 
-  if ((context.type === "git-push" || context.type === "git-pull") && context.changeDetails !== undefined) {
+  if ((context.type === "git-push" || context.type === "git-pull" || context.type === "git-change") && context.changeDetails !== undefined) {
     const d = context.changeDetails;
     const triggerLabel =
       d.trigger === "push" ? "pushed commits" :
       d.trigger === "pull-merge" ? "pulled changes (merge)" :
+      d.trigger === "remote-change" ? "remote branch changes" :
       "pulled changes (rebase)";
 
     contextSection = `## Git Change Context
@@ -816,15 +931,16 @@ Read each entry with \`ctx-hive show <id>\` before deciding its fate.
 ### 2. Update entries that:
 - Have a **valid core insight** but contain incorrect details (wrong file paths, renamed functions, outdated API signatures)
 - Need **factual corrections** based on recent changes
-- To update: delete the old entry, then create a corrected version preserving the same scope and tags
+- To update: delete the old entry (with --reason explaining why), then create a corrected version preserving the same scope and tags (with --reason explaining the update)
 
 ### 3. Merge entries that:
 - Cover the **same topic** with overlapping information
 - Would be **more useful as a single, consolidated entry**
-- To merge: delete the weaker/duplicate entries; optionally update the surviving entry to incorporate missing details
+- To merge: delete the weaker/duplicate entries (with --reason); optionally update the surviving entry to incorporate missing details
 
 ## Rules
 - Read EVERY entry with \`ctx-hive show <id>\` before making decisions
+- **Always include \`--reason\`** on every delete and add command — this is recorded for observability
 - Do NOT create brand new entries that capture new insights — that is the extractor's job
 - It is perfectly fine to make **0 changes** if all entries are current and valid
 - When in doubt, leave an entry alone — false positives are worse than stale entries

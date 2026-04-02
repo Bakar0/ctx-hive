@@ -110,6 +110,29 @@ export interface MemoryEntry extends IndexEntry {
   body: string;
 }
 
+export interface DeletedEntry extends IndexEntry {
+  body: string;
+  deletedAt: string;
+}
+
+export type RevisionAction = "created" | "updated" | "deleted" | "restored";
+
+export interface EntryRevision {
+  id: number;
+  entryId: string;
+  action: RevisionAction;
+  reason: string | null;
+  source: string;
+  executionId: string | null;
+  title: string;
+  scope: Scope;
+  tags: string[];
+  project: string;
+  body: string;
+  tokens: number;
+  createdAt: string;
+}
+
 export interface HitBucket {
   date: string;
   count: number;
@@ -278,6 +301,15 @@ export interface TrackedRepo {
   remoteUrl: string;
   trackedAt: string;
   lastScannedAt?: string;
+}
+
+export interface BranchWatch {
+  id: number;
+  repoId: number;
+  branchName: string;
+  lastSeenSha: string | null;
+  lastCheckedAt: string | null;
+  isDefault: boolean;
 }
 
 export type WsEvent =

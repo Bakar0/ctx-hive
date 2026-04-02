@@ -27,6 +27,7 @@ export interface SpawnClaudeOptions {
   model?: string;
   allowedTools?: string[];
   logsDir?: string;
+  env?: Record<string, string>;
 }
 
 // Stream message types from Claude CLI
@@ -73,6 +74,9 @@ export async function spawnClaude(options: SpawnClaudeOptions): Promise<ClaudeIn
   delete env.CLAUDECODE;
   // Signal to ctx-hive hooks (e.g. inject) that this is a pipeline agent — skip memory injection
   env.CTX_HIVE_PIPELINE = "1";
+  if (options.env !== undefined) {
+    Object.assign(env, options.env);
+  }
 
   const args = ["claude", "-p", "--no-session-persistence", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
   if (options.model !== undefined) {

@@ -5,6 +5,7 @@ import { scanForRepos, resolveRepoMeta } from "../ctx/init.ts";
 import { loadIndex, type IndexEntry } from "../ctx/store.ts";
 import { loadTrackedRepos, type TrackedRepo } from "./tracking.ts";
 import { runGit } from "../git/run.ts";
+import { REPOS_DIR } from "./clone.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -100,8 +101,11 @@ export async function discoverRepos(
   }
 
   // Enrich in parallel
+  // Filter out bare clones/worktrees managed by ctx-hive
+  const filtered = scanned.filter((r) => !r.absPath.startsWith(REPOS_DIR));
+
   const results = await Promise.all(
-    scanned.map(async (repo): Promise<DiscoveredRepo> => {
+    filtered.map(async (repo): Promise<DiscoveredRepo> => {
       const [meta, branchInfo, gitStat] = await Promise.all([
         resolveRepoMeta(repo.absPath),
         getRepoBranchInfo(repo.absPath),

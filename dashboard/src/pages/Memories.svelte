@@ -14,15 +14,17 @@
   import { timeAgo } from "../format/time";
   import { formatCompact } from "../format/numbers";
   import * as api from "../api/client";
-  import type { MemoryEntry, EntrySignals } from "../api/types";
+  import type { MemoryEntry, EntrySignals, DeletedEntry } from "../api/types";
 
   interface Props { projects: string[]; }
   let { projects }: Props = $props();
 
   let selectedId = $state<string | null>(null);
+  let viewTab = $state<"active" | "deleted">("active");
 
   let allMemories = $state<MemoryEntry[]>([]);
   let allSignals = $state<Record<string, EntrySignals>>({});
+  let deletedEntries = $state<DeletedEntry[]>([]);
   let searchText = $state("");
   let scopeFilter = $state("");
   let projectFilter = $state("");
@@ -42,6 +44,12 @@
       allSignals = sigRes.entries ?? {};
     } catch { /* silent */ }
   }
+
+  async function fetchDeleted() {
+    try { deletedEntries = await api.getDeletedMemories(); } catch { /* silent */ }
+  }
+
+  $effect(() => { if (viewTab === "deleted") void fetchDeleted(); });
 
   let allTags = $derived.by(() => {
     const set = new Set<string>();
@@ -135,19 +143,67 @@
   function scoreBarColor(s: number): string { return s < 0.3 ? "var(--destructive)" : s < 0.6 ? "var(--warning)" : "var(--success)"; }
 
   async function handleDelete(id: string) {
-    if (!confirm("Delete this memory entry? This cannot be undone.")) return;
+    if (!confirm("Delete this memory entry? It can be restored later.")) return;
     try { await api.deleteMemory(id); await fetchMemories(); } catch { /* silent */ }
+  }
+
+  async function handleRestore(id: string) {
+    try { await api.restoreMemory(id); await fetchMemories(); } catch { /* silent */ }
   }
 
   function resetPage() { page = 1; }
 </script>
 
-<div class="mb-6">
-  <h1 class="text-xl font-semibold mb-1">Memories</h1>
-  <p class="text-sm text-muted-foreground">Browse and manage your stored memories</p>
+<div class="mb-6 flex items-end justify-between">
+  <div>
+    <h1 class="text-xl font-semibold mb-1">Memories</h1>
+    <p class="text-sm text-muted-foreground">Browse and manage your stored memories</p>
+  </div>
+  <div class="inline-flex rounded-lg border border-border overflow-hidden">
+    <button
+      class="px-3 py-1.5 text-xs font-medium transition-colors {viewTab === 'active' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+      onclick={() => viewTab = "active"}
+    >Active ({allMemories.length})</button>
+    <button
+      class="px-3 py-1.5 text-xs font-medium transition-colors border-l border-border {viewTab === 'deleted' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+      onclick={() => viewTab = "deleted"}
+    >Deleted ({deletedEntries.length})</button>
+  </div>
 </div>
 
-{#if allMemories.length > 0}
+{#if viewTab === "deleted"}
+  {#if deletedEntries.length === 0}
+    <div class="text-center py-12 text-muted-foreground">
+      <p class="text-sm">No deleted memories. Entries deleted by the replay agent or manually will appear here.</p>
+    </div>
+  {:else}
+    <Card.Root>
+      <Table.Root>
+        <Table.Header>
+          <Table.Row><Table.Head>Title</Table.Head><Table.Head>Scope</Table.Head><Table.Head>Project</Table.Head><Table.Head>Tokens</Table.Head><Table.Head>Deleted</Table.Head><Table.Head></Table.Head></Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {#each deletedEntries as d (d.id)}
+            <Table.Row class="opacity-70">
+              <Table.Cell class="max-w-[380px]">
+                <span class="font-medium truncate max-w-[380px] block">{d.title}</span>
+                {#if d.body}<div class="text-[11px] text-dim mt-0.5 truncate max-w-[400px]">{d.body.slice(0, 80).replace(/\n/g, " ")}</div>{/if}
+                {#if d.tags?.length}<div class="mt-0.5">{#each d.tags as t}<ShadBadge variant="outline" class="text-[10px] h-4 px-1.5 mr-1 mb-0.5">{t}</ShadBadge>{/each}</div>{/if}
+              </Table.Cell>
+              <Table.Cell><Badge variant={d.scope} /></Table.Cell>
+              <Table.Cell class="font-mono text-xs">{d.project || "\u2014"}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground">{d.tokens > 0 ? formatCompact(d.tokens) : "\u2014"}</Table.Cell>
+              <Table.Cell class="font-mono text-xs text-muted-foreground" title={new Date(d.deletedAt).toLocaleString()}>{timeAgo(d.deletedAt)}</Table.Cell>
+              <Table.Cell>
+                <Button variant="outline" size="sm" class="h-6 text-[11px]" onclick={() => handleRestore(d.id)}>restore</Button>
+              </Table.Cell>
+            </Table.Row>
+          {/each}
+        </Table.Body>
+      </Table.Root>
+    </Card.Root>
+  {/if}
+{:else if allMemories.length > 0}
   <div class="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3 mb-6">
     <StatCard label="Total Memories" value={stats.total} color="accent" />
     <StatCard label="Avg Score" value={stats.scored > 0 ? stats.avgScore.toFixed(2) : "\u2014"} color={stats.avgScore < 0.3 ? "red" : stats.avgScore < 0.6 ? "yellow" : "green"} />

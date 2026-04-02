@@ -2,12 +2,15 @@ import type {
   MetricsSnapshot,
   JobView,
   MemoryEntry,
+  DeletedEntry,
+  EntryRevision,
   SignalsStore,
   DiscoveredRepo,
   SearchRecord,
   SearchStats,
   SessionSummary,
   TrackedRepo,
+  BranchWatch,
   PipelineExecution,
   PipelineStats,
   MultiSearchResponse,
@@ -76,6 +79,31 @@ export function getMemories(params?: {
 
 export function deleteMemory(id: string): Promise<{ ok: boolean }> {
   return del(`/api/memories/${encodeURIComponent(id)}`);
+}
+
+export function getDeletedMemories(): Promise<DeletedEntry[]> {
+  return get("/api/memories/deleted");
+}
+
+export function restoreMemory(id: string): Promise<{ ok: boolean }> {
+  return post(`/api/memories/${encodeURIComponent(id)}/restore`);
+}
+
+export function getEntryRevisions(entryId: string): Promise<EntryRevision[]> {
+  return get(`/api/memories/${encodeURIComponent(entryId)}/revisions`);
+}
+
+export function getRecentRevisions(params?: {
+  limit?: number;
+  action?: string;
+  executionId?: string;
+}): Promise<EntryRevision[]> {
+  const sp = new URLSearchParams();
+  if (params?.limit != null) sp.set("limit", String(params.limit));
+  if (params?.action != null) sp.set("action", params.action);
+  if (params?.executionId != null) sp.set("executionId", params.executionId);
+  const qs = sp.toString();
+  return get(`/api/revisions${qs !== "" ? `?${qs}` : ""}`);
 }
 
 export function getProjects(): Promise<string[]> {
@@ -181,8 +209,23 @@ export function untrackRepo(absPath: string): Promise<{ ok: boolean }> {
   return post("/api/repos/untrack", { absPath });
 }
 
-export function syncRepo(absPath: string): Promise<{ ok: boolean }> {
+export function syncRepo(absPath: string): Promise<{ ok: boolean; changesDetected?: number }> {
   return post("/api/repos/sync", { absPath });
+}
+
+export function getRepoBranches(absPath: string): Promise<{
+  watched: BranchWatch[];
+  available: string[];
+}> {
+  return get(`/api/repos/branches?absPath=${encodeURIComponent(absPath)}`);
+}
+
+export function watchBranch(absPath: string, branchName: string): Promise<{ ok: boolean }> {
+  return post("/api/repos/branches/watch", { absPath, branchName });
+}
+
+export function unwatchBranch(absPath: string, branchName: string): Promise<{ ok: boolean }> {
+  return post("/api/repos/branches/unwatch", { absPath, branchName });
 }
 
 export function openRepo(

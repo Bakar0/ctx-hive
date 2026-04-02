@@ -133,7 +133,7 @@ export function ftsSearch(
 
   // Helper to run FTS5 query with filters
   function runFtsQuery(matchQuery: string): FtsRow[] {
-    const conditions: string[] = ["entries_fts MATCH ?"];
+    const conditions: string[] = ["entries_fts MATCH ?", "e.deleted_at IS NULL"];
     const params: (string | number)[] = [matchQuery];
 
     if (filters.scope) {

@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import { getDb } from "../db/connection.ts";
 import { resolveRepoMeta } from "../ctx/init.ts";
-import { patchRepoHooks } from "../hooks/git-installer.ts";
+import { initBranchWatches } from "../daemon/branch-watcher.ts";
+import { cloneBare, addWorktree, removeClone, detectDefaultBranch } from "./clone.ts";
 
 // ── Schemas & Types ───────────────────────────────────────────────────
 
@@ -52,7 +53,13 @@ export function loadTrackedRepos(): TrackedRepo[] {
 
 // ── Track / Untrack ────────────────────────────────────────────────────
 
-export async function trackRepo(absPath: string): Promise<TrackedRepo> {
+export interface TrackResult {
+  repo: TrackedRepo;
+  repoId: number;
+  defaultBranch: string | null;
+}
+
+export async function trackRepo(absPath: string): Promise<TrackResult> {
   const normalized = resolve(absPath);
 
   try {
@@ -69,7 +76,7 @@ export async function trackRepo(absPath: string): Promise<TrackedRepo> {
 
   // Dedup by absPath
   const existing = db.prepare<RepoRow, [string]>("SELECT * FROM tracked_repos WHERE abs_path = ?").get(normalized);
-  if (existing) return rowToTrackedRepo(existing);
+  if (existing) return { repo: rowToTrackedRepo(existing), repoId: existing.id, defaultBranch: null };
 
   const meta = await resolveRepoMeta(normalized);
   const tracked: TrackedRepo = {
@@ -80,21 +87,43 @@ export async function trackRepo(absPath: string): Promise<TrackedRepo> {
     trackedAt: new Date().toISOString(),
   };
 
-  db.prepare(`
+  const insertResult = db.prepare(`
     INSERT INTO tracked_repos (name, abs_path, org, remote_url, tracked_at)
     VALUES (?, ?, ?, ?, ?)
   `).run(tracked.name, tracked.absPath, tracked.org, tracked.remoteUrl, tracked.trackedAt);
 
-  await patchRepoHooks(normalized);
+  const repoId = Number(insertResult.lastInsertRowid);
 
-  return tracked;
+  // Create bare clone and worktree for the default branch
+  let defaultBranch: string | null = null;
+  if (tracked.remoteUrl !== "") {
+    await cloneBare(tracked.remoteUrl, repoId);
+    defaultBranch = await detectDefaultBranch(repoId);
+    if (defaultBranch !== null) {
+      await addWorktree(repoId, defaultBranch);
+    }
+    await initBranchWatches(normalized, repoId);
+  }
+
+  return { repo: tracked, repoId, defaultBranch };
 }
 
-export function untrackRepo(absPath: string): boolean {
+export async function untrackRepo(absPath: string): Promise<boolean> {
   const normalized = resolve(absPath);
   const db = getDb();
+
+  // Get repo ID before deleting to clean up clone
+  const row = db.prepare<{ id: number }, [string]>("SELECT id FROM tracked_repos WHERE abs_path = ?").get(normalized);
+
   const result = db.prepare("DELETE FROM tracked_repos WHERE abs_path = ?").run(normalized);
-  return result.changes > 0;
+  if (result.changes === 0) return false;
+
+  // Clean up bare clone and worktrees
+  if (row !== null) {
+    await removeClone(row.id);
+  }
+
+  return true;
 }
 
 /**
@@ -116,6 +145,13 @@ export function findTrackedRepoFor(
     }
   }
   return best;
+}
+
+export function getRepoId(absPath: string): number | null {
+  const normalized = resolve(absPath);
+  const db = getDb();
+  const row = db.prepare<{ id: number }, [string]>("SELECT id FROM tracked_repos WHERE abs_path = ?").get(normalized);
+  return row?.id ?? null;
 }
 
 export function updateLastScanned(absPath: string): void {

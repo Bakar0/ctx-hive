@@ -3,13 +3,14 @@ import { join } from "node:path";
 import { hiveRoot } from "../ctx/store.ts";
 import { getDb, closeDb } from "../db/connection.ts";
 import { seedFromFiles } from "../db/seed.ts";
-import { errorMessage } from "../git/run.ts";
+import { runGit, errorMessage } from "../git/run.ts";
 import {
   listJobs,
   readJob,
   failJob,
   isDuplicate,
   isGitJobProcessed,
+  isGitChangeProcessed,
   stampStarted,
   completeJob,
 } from "./jobs.ts";
@@ -18,6 +19,7 @@ import { handleApiRequest } from "./api.ts";
 import { wsHandlers, startMetricsBroadcast, stopMetricsBroadcast, broadcastJobEvent } from "./ws.ts";
 import { loadTrackedRepos, findTrackedRepoFor } from "../repo/tracking.ts";
 import { recomputeAllScores } from "../ctx/signals.ts";
+import { pollAllRepos, ensureBranchWatches } from "./branch-watcher.ts";
 import dashboardHtmlContent from "../../dashboard/dist/index.html" with { type: "text" };
 
 // ── Constants ─────────────────────────────────────────────────────────
@@ -25,6 +27,7 @@ import dashboardHtmlContent from "../../dashboard/dist/index.html" with { type: 
 const PID_FILE = join(hiveRoot(), "daemon.pid");
 const PORT_FILE = join(hiveRoot(), "daemon.port");
 const POLL_INTERVAL_MS = 30_000;
+const BRANCH_POLL_INTERVAL_MS = 60_000;
 const DEBOUNCE_MS = 100;
 const DASHBOARD_PORT = 3939;
 
@@ -130,6 +133,15 @@ async function processJob(jobId: string): Promise<void> {
     if (job.type === "git-push" || job.type === "git-pull") {
       if (job.headSha !== "" && isGitJobProcessed(job.headSha, job.repoPath)) {
         log("info", `skipping already-processed commit: ${job.headSha.slice(0, 8)} in ${job.repoPath}`);
+        completeJob(jobId, { success: true, durationMs: 0 });
+        return;
+      }
+    }
+
+    // Duplicate check for git-change jobs (polling-based)
+    if (job.type === "git-change") {
+      if (isGitChangeProcessed(job.currentSha, job.repoPath, job.branch)) {
+        log("info", `skipping already-processed change: ${job.currentSha.slice(0, 8)} on ${job.branch}`);
         completeJob(jobId, { success: true, durationMs: 0 });
         return;
       }
@@ -278,6 +290,7 @@ function startHttpServer(port: number): void {
 
 let shuttingDown = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let branchPollTimer: ReturnType<typeof setInterval> | null = null;
 
 async function shutdown(): Promise<void> {
   if (shuttingDown) return;
@@ -296,6 +309,11 @@ async function shutdown(): Promise<void> {
     pollTimer = null;
   }
 
+  if (branchPollTimer) {
+    clearInterval(branchPollTimer);
+    branchPollTimer = null;
+  }
+
   if (drainTimer) {
     clearTimeout(drainTimer);
     drainTimer = null;
@@ -311,6 +329,16 @@ async function shutdown(): Promise<void> {
   await releasePidLock();
   await unlink(PORT_FILE).catch(() => {});
   log("info", "daemon stopped");
+}
+
+// ── Legacy hook migration ────────────────────────────────────────────
+
+async function migrateLegacyHooks(): Promise<void> {
+  const output = await runGit(["config", "--global", "core.hooksPath"], ".");
+  if (output !== "" && (output.includes("ctx-hive") || output.includes(".ctx-hive"))) {
+    await runGit(["config", "--global", "--unset", "core.hooksPath"], ".");
+    log("info", "migrated: removed legacy ctx-hive global git hooks (core.hooksPath)");
+  }
 }
 
 // ── Main entry ────────────────────────────────────────────────────────
@@ -389,4 +417,42 @@ export async function serve(args: string[]): Promise<void> {
     debug("poll sweep");
     void drainPending();
   }, POLL_INTERVAL_MS);
+
+  // Initialize branch watches for any tracked repos that don't have them yet
+  try {
+    await ensureBranchWatches();
+  } catch (err) {
+    log("error", `branch watch init failed: ${errorMessage(err)}`);
+  }
+
+  // Auto-uninstall legacy git hooks if core.hooksPath points to ctx-hive
+  try {
+    await migrateLegacyHooks();
+  } catch (err) {
+    log("error", `legacy hook migration failed: ${errorMessage(err)}`);
+  }
+
+  // Initial branch poll to catch up on changes while daemon was down
+  try {
+    const changes = await pollAllRepos();
+    if (changes > 0) {
+      log("info", `initial branch poll found ${changes} change(s)`);
+      void drainPending();
+    }
+  } catch (err) {
+    log("error", `initial branch poll failed: ${errorMessage(err)}`);
+  }
+
+  // Poll remote branches for changes
+  branchPollTimer = setInterval(() => {
+    debug("branch poll sweep");
+    void pollAllRepos().then((changes) => {
+      if (changes > 0) {
+        log("info", `branch poll found ${changes} change(s)`);
+        void drainPending();
+      }
+    }).catch((err) => {
+      log("error", `branch poll failed: ${errorMessage(err)}`);
+    });
+  }, BRANCH_POLL_INTERVAL_MS);
 }
